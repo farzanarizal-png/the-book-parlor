@@ -1,18 +1,33 @@
-# React + Vite
+# 📚 The Book Parlor
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A dedicated web-based book exchange platform for the Malaysian reading community. Swap stories, share adventures.
 
-Currently, two official plugins are available:
+![The Book Parlor](<img width="1526" height="895" alt="Screenshot 2026-02-19 233616" src="https://github.com/user-attachments/assets/e2f63c1f-c209-4da7-90c0-eefb12417979" />
+)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 🚀 Live Demo
+[https://thebookparlor.vercel.app](https://thebookparlor.vercel.app)
 
-## React Compiler
+## 📖 About The Project
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The Book Parlor is a purpose-built platform that simplifies book exchanges among readers. Unlike general marketplaces like Facebook Marketplace or Carousell, this system is specifically designed for book swapping, offering a secure, user-friendly, and community-focused experience.
 
-## Expanding the ESLint configuration
+### Key Features
+- 🔐 **Secure Authentication** - Email/password login with Firebase Authentication
+- 📖 **Auto-fill Book Listing** - Google Books API integration for automatic metadata
+- 🔍 **Smart Search & Filter** - Find books by genre, location, and condition
+- 💬 **In-App Messaging** - Coordinate swaps without sharing personal contacts
+- ⭐ **Rating System** - Build trust within the community
+- 📱 **Responsive Design** - Works seamlessly on all devices
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
-"# the-book-parlor" 
-"# the-book-parlor" 
+## 🛠️ Built With
+
+- **Frontend**: React.js with Tailwind CSS
+- **Backend**: Firebase Firestore & Authentication
+- **API**: Google Books API
+- **Deployment**: Vercel
+
+## 🏗️ Project Structure
+
+
+
