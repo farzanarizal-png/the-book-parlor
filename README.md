@@ -2,7 +2,8 @@
 
 A dedicated web-based book exchange platform for the Malaysian reading community. Swap stories, share adventures.
 
-![The Book Parlor](link-to-your-screenshot.png) *Add a screenshot of your app here*
+![The Book Parlor](<img width="1526" height="895" alt="Screenshot 2026-02-19 233616" src="https://github.com/user-attachments/assets/e2f63c1f-c209-4da7-90c0-eefb12417979" />
+)
 
 ## 🚀 Live Demo
 [https://thebookparlor.vercel.app](https://thebookparlor.vercel.app)
@@ -27,5 +28,6 @@ The Book Parlor is a purpose-built platform that simplifies book exchanges among
 - **Deployment**: Vercel
 
 ## 🏗️ Project Structure
+
 
 
