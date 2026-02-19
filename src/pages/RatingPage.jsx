@@ -1,5 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { auth, db } from '../firebase'; // Ensure these are exported from your firebase.js
+import { onAuthStateChanged } from 'firebase/auth';
+import { 
+  collection, 
+  query, 
+  where, 
+  onSnapshot, 
+  doc, 
+  updateDoc, 
+  serverTimestamp 
+} from 'firebase/firestore';
 
 function RatingPage() {
   const navigate = useNavigate();
@@ -13,19 +24,71 @@ function RatingPage() {
     if (item === 'Rating') { /* Already here */ }
   };
 
-  // --- UI States ---
+  // --- UI & AUTH STATES ---
   const [activeTab, setActiveTab] = useState('pending'); // 'pending' or 'received'
+  const [currentUser, setCurrentUser] = useState(null);
   
-  // Interactive Star States (even though empty now, good to keep for when they get data)
-  const [hoveredStar, setHoveredStar] = useState(0);
+  // Interactive Star States
+  const [hoveredStar, setHoveredStar] = useState(0); // Optional: use this if you build interactive stars
   const [selectedStars, setSelectedStars] = useState({}); 
   const [reviewTexts, setReviewTexts] = useState({});     
 
-  // --- Mock Data (NEW USER: Empty State) ---
-  const [pendingRatings, setPendingRatings] = useState([]); // No pending swaps to rate yet
-  const receivedRatings = []; // No reviews received yet
+  // --- FIREBASE DATA STATES ---
+  const [pendingRatings, setPendingRatings] = useState([]); 
+  const [receivedRatings, setReceivedRatings] = useState([]);
+  const [averageRating, setAverageRating] = useState("0.0");
 
-  // --- Handlers ---
+  // 1. LISTEN FOR LOGGED-IN USER
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. FETCH REAL-TIME RATINGS FROM FIREBASE
+  useEffect(() => {
+    if (!currentUser) return;
+
+    // A. Listen for pending reviews THIS user needs to give
+    const qPending = query(
+      collection(db, 'ratings'), 
+      where('reviewerId', '==', currentUser.uid),
+      where('status', '==', 'pending')
+    );
+
+    const unsubPending = onSnapshot(qPending, (snapshot) => {
+      const pending = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPendingRatings(pending);
+    });
+
+    // B. Listen for completed reviews THIS user has received
+    const qReceived = query(
+      collection(db, 'ratings'), 
+      where('revieweeId', '==', currentUser.uid),
+      where('status', '==', 'completed')
+    );
+
+    const unsubReceived = onSnapshot(qReceived, (snapshot) => {
+      const received = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setReceivedRatings(received);
+
+      // C. Calculate Average Rating Dynamically
+      if (received.length > 0) {
+        const totalStars = received.reduce((sum, review) => sum + review.rating, 0);
+        setAverageRating((totalStars / received.length).toFixed(1));
+      } else {
+        setAverageRating("0.0");
+      }
+    });
+
+    return () => {
+      unsubPending();
+      unsubReceived();
+    };
+  }, [currentUser]);
+
+  // --- HANDLERS ---
   const handleStarClick = (swapId, starValue) => {
     setSelectedStars(prev => ({ ...prev, [swapId]: starValue }));
   };
@@ -34,14 +97,35 @@ function RatingPage() {
     setReviewTexts(prev => ({ ...prev, [swapId]: text }));
   };
 
-  const handleSubmitReview = (swapId, partnerName) => {
+  // 3. PUSH REVIEW TO FIREBASE
+  const handleSubmitReview = async (swapId, partnerName) => {
     const rating = selectedStars[swapId] || 0;
+    const reviewText = reviewTexts[swapId] || "";
+
     if (rating === 0) {
       alert("Please select a star rating first!");
       return;
     }
-    alert(`Thank you! Your ${rating}-star review for ${partnerName} has been submitted.`);
-    setPendingRatings(prev => prev.filter(swap => swap.id !== swapId));
+
+    try {
+      // Update the existing pending rating document to 'completed'
+      const ratingRef = doc(db, "ratings", swapId);
+      await updateDoc(ratingRef, {
+        rating: rating,
+        reviewText: reviewText,
+        status: 'completed',
+        completedAt: serverTimestamp()
+      });
+
+      alert(`Thank you! Your ${rating}-star review for ${partnerName} has been submitted.`);
+      
+      // Note: No need to manually filter pendingRatings out of state anymore!
+      // The onSnapshot listener above will automatically remove it because its status changed.
+
+    } catch (error) {
+      console.error("Error submitting review:", error);
+      alert("Something went wrong saving your review.");
+    }
   };
 
   return (
@@ -53,7 +137,6 @@ function RatingPage() {
           onClick={() => navigate('/home')}
           className="bg-[#faf6e9] rounded-2xl p-4 mb-10 w-4/5 shadow-sm flex justify-center cursor-pointer transition-transform hover:scale-105"
         >
-          {/* ORIGINAL LOGO RESTORED */}
           <img src="logo.png" alt="The Book Parlor" className="w-full h-auto" />
         </div>
 
@@ -121,7 +204,7 @@ function RatingPage() {
             </button>
           </div>
 
-          {/* --- TAB CONTENT: PENDING RATINGS (NEW USER STATE) --- */}
+          {/* --- TAB CONTENT: PENDING RATINGS --- */}
           {activeTab === 'pending' && (
             <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
               {pendingRatings.length === 0 ? (
@@ -142,41 +225,66 @@ function RatingPage() {
                 </div>
               ) : (
                 pendingRatings.map((swap) => (
-                  /* Existing pending rating card logic (hidden for new users) */
-                  <div key={swap.id}></div>
+                  /* Existing pending rating card logic */
+                  <div key={swap.id}>
+                    {/* Your interactive star UI will go inside here, utilizing handleStarClick, handleTextChange, and handleSubmitReview(swap.id, swap.partnerName) */}
+                  </div>
                 ))
               )}
             </div>
           )}
 
-          {/* --- TAB CONTENT: MY REVIEWS (NEW USER STATE) --- */}
+          {/* --- TAB CONTENT: MY REVIEWS --- */}
           {activeTab === 'received' && (
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              {/* Overall Rating Banner - Zero State */}
+              
+              {/* Overall Rating Banner */}
               <div className="bg-[#a3b19b] p-6 rounded-2xl shadow-inner mb-6 text-center text-white flex flex-col items-center">
-                 <h2 className="text-3xl font-bold mb-1">Your Rating: 0.0 / 5</h2>
+                 {/* Replaced hardcoded zeros with actual calculated data */}
+                 <h2 className="text-3xl font-bold mb-1">Your Rating: {averageRating} / 5</h2>
                  <div className="flex space-x-1 mt-1">
                     {[1, 2, 3, 4, 5].map((star) => (
-                      <svg key={star} className="w-6 h-6 text-white/40 fill-current" viewBox="0 0 20 20">
+                      <svg key={star} className={`w-6 h-6 ${star <= Math.round(parseFloat(averageRating)) ? 'text-yellow-300' : 'text-white/40'} fill-current`} viewBox="0 0 20 20">
                         <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                       </svg>
                     ))}
                  </div>
-                 <p className="text-sm mt-3 opacity-90 font-sans font-medium">Based on 0 reviews</p>
+                 <p className="text-sm mt-3 opacity-90 font-sans font-medium">Based on {receivedRatings.length} reviews</p>
               </div>
 
-              {/* Empty state for received reviews */}
-              <div className="bg-white rounded-2xl p-12 text-center border border-gray-100 shadow-sm mt-6">
-                 <div className="flex justify-center mb-4">
-                    <svg className="w-16 h-16 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                  </div>
-                <p className="text-2xl italic text-gray-800 mb-2 font-bold">No reviews yet!</p>
-                <p className="text-gray-500 font-sans max-w-md mx-auto">
-                  When you trade books with other members of The Book Parlor, their feedback and ratings will appear here.
-                </p>
-              </div>
+              {/* Conditional Rendering: Empty State vs Populated State */}
+              {receivedRatings.length === 0 ? (
+                <div className="bg-white rounded-2xl p-12 text-center border border-gray-100 shadow-sm mt-6">
+                   <div className="flex justify-center mb-4">
+                      <svg className="w-16 h-16 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                      </svg>
+                    </div>
+                  <p className="text-2xl italic text-gray-800 mb-2 font-bold">No reviews yet!</p>
+                  <p className="text-gray-500 font-sans max-w-md mx-auto">
+                    When you trade books with other members of The Book Parlor, their feedback and ratings will appear here.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {receivedRatings.map((review) => (
+                    <div key={review.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+                      <div className="flex justify-between items-start mb-2">
+                        <h4 className="font-bold text-gray-800">{review.partnerName || "A Reader"}</h4>
+                        <div className="flex text-yellow-400">
+                           {/* Quick loop to show stars */}
+                           {[...Array(5)].map((_, i) => (
+                             <svg key={i} className={`w-4 h-4 ${i < review.rating ? 'fill-current' : 'text-gray-200 fill-current'}`} viewBox="0 0 20 20">
+                               <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                             </svg>
+                           ))}
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-600 font-sans italic">"{review.reviewText}"</p>
+                    </div>
+                  ))}
+                </div>
+              )}
 
             </div>
           )}

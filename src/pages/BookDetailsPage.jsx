@@ -1,29 +1,64 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
-// Simulating the user's bookshelf (Currently empty for a new user)
-const myBookshelf = []; 
-
-// Updated book data including status and ownerRating
-const bookData = {
-  id: 5,
-  title: "The Silent Patient",
-  author: "Alex Michaelides",
-  location: "Kuala Lumpur",
-  genre: "Mystery / Thriller",
-  owner: "SarahReads",
-  condition: "Like New",
-  status: "Available", // Added Status
-  ownerRating: 4.8,    // Added Rating
-  description: "Alicia Berenson’s life is seemingly perfect. A famous painter married to an in-demand fashion photographer, she lives in a grand house with big windows overlooking a park in one of London’s most desirable areas. One evening her husband returns home late from a fashion shoot, and Alicia shoots him five times in the face, and then never speaks another word.",
-};
+// --- FIREBASE IMPORTS ---
+import { auth, db } from '../firebase'; 
+import { doc, getDoc, collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
 function BookDetailsPage() {
   const navigate = useNavigate();
-  const { id } = useParams(); 
+  const { id } = useParams(); // Gets the book ID from the URL (e.g., /book/123)
+  
+  // --- STATES ---
+  const [isLoading, setIsLoading] = useState(true);
+  const [bookData, setBookData] = useState(null);
+  const [myBookshelf, setMyBookshelf] = useState([]);
+  
+  // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [swapSuccess, setSwapSuccess] = useState(false);
+  const [selectedBookToOffer, setSelectedBookToOffer] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // --- FETCH DATA FROM FIREBASE ---
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      try {
+        // 1. Fetch the details of the book being viewed
+        const bookRef = doc(db, 'books', id);
+        const bookSnap = await getDoc(bookRef);
+        
+        if (bookSnap.exists()) {
+          setBookData({ id: bookSnap.id, ...bookSnap.data() });
+        } else {
+          console.log("No such book!");
+          setBookData(null);
+        }
+
+        // 2. If logged in, fetch the user's available books for the swap modal
+        if (user) {
+          const q = query(
+            collection(db, 'books'), 
+            where("ownerId", "==", user.uid),
+            where("status", "==", "Available") // Only allow them to swap available books
+          );
+          const myBooksSnap = await getDocs(q);
+          const myBooks = myBooksSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          setMyBookshelf(myBooks);
+        }
+
+      } catch (error) {
+        console.error("Error fetching data:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [id]);
+
+  // --- NAVIGATION ---
   const handleNavigation = (item) => {
     if (item === 'Home') navigate('/home');
     if (item === 'Add a New Book') navigate('/add-book');
@@ -31,17 +66,77 @@ function BookDetailsPage() {
     if (item === 'Chat') navigate('/chat');
   };
 
+  // --- SWAP LOGIC ---
   const handleRequestSwap = () => {
+    if (!auth.currentUser) {
+      alert("Please log in to request a swap!");
+      navigate('/login');
+      return;
+    }
+    // Prevent user from swapping with themselves
+    if (bookData.ownerId === auth.currentUser.uid) {
+      alert("You cannot swap a book with yourself!");
+      return;
+    }
     setIsModalOpen(true);
   };
 
-  const confirmSwap = () => {
-    setSwapSuccess(true);
-    setTimeout(() => {
-      setIsModalOpen(false);
-      setSwapSuccess(false);
-    }, 3000); 
+  const confirmSwap = async () => {
+    if (!selectedBookToOffer) {
+      alert("Please select a book to offer first.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      // Create a swap request document in Firebase
+      await addDoc(collection(db, 'swapRequests'), {
+        requestedBookId: bookData.id,
+        requestedBookTitle: bookData.title,
+        requestedOwnerId: bookData.ownerId,
+        requesterId: auth.currentUser.uid,
+        offeredBookId: selectedBookToOffer.id,
+        offeredBookTitle: selectedBookToOffer.title,
+        status: 'pending',
+        createdAt: serverTimestamp()
+      });
+
+      setSwapSuccess(true);
+      setTimeout(() => {
+        setIsModalOpen(false);
+        setSwapSuccess(false);
+        setSelectedBookToOffer(null);
+      }, 3000); 
+
+    } catch (error) {
+      console.error("Error submitting swap request:", error);
+      alert("Something went wrong. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  // Helper to get initials
+  const getInitials = (name) => {
+    if (!name) return "??";
+    const names = name.split(' ');
+    if (names.length >= 2) return (names[0][0] + names[1][0]).toUpperCase();
+    return name.substring(0, 2).toUpperCase();
+  };
+
+  // --- RENDER LOADING OR NOT FOUND ---
+  if (isLoading) {
+    return <div className="flex h-screen items-center justify-center bg-[#faf6e9] font-serif text-2xl">Loading Book Details...</div>;
+  }
+
+  if (!bookData) {
+    return (
+      <div className="flex flex-col h-screen items-center justify-center bg-[#faf6e9] font-serif">
+        <h1 className="text-3xl font-bold text-gray-800 mb-4">Book Not Found</h1>
+        <button onClick={() => navigate('/home')} className="bg-[#5a7034] text-white px-6 py-2 rounded-full font-sans">Return Home</button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-[#faf6e9] font-serif overflow-hidden">
@@ -94,11 +189,15 @@ function BookDetailsPage() {
               <div className={`absolute top-6 right-6 px-4 py-1.5 rounded-full font-sans font-bold text-[10px] uppercase tracking-widest shadow-md ${
                 bookData.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'
               }`}>
-                {bookData.status}
+                {bookData.status || 'Available'}
               </div>
 
-              <div className="w-48 h-72 bg-white rounded-md shadow-2xl flex items-center justify-center border border-gray-200 text-center px-4">
-                <span className="text-gray-500 font-bold text-xl">{bookData.title}</span>
+              <div className="w-48 h-72 bg-white rounded-md shadow-2xl flex items-center justify-center border border-gray-200 text-center relative overflow-hidden">
+                {bookData.coverUrl ? (
+                   <img src={bookData.coverUrl} alt={bookData.title} className="w-full h-full object-cover absolute inset-0" />
+                ) : (
+                   <span className="text-gray-500 font-bold text-xl px-4 z-10">{bookData.title}</span>
+                )}
               </div>
             </div>
 
@@ -108,43 +207,43 @@ function BookDetailsPage() {
                 <div className="flex justify-between items-start mb-2">
                   <h1 className="text-4xl font-bold text-gray-800">{bookData.title}</h1>
                   <span className="bg-[#e9ecef] text-gray-600 py-1 px-3 rounded-full text-xs font-sans font-bold tracking-wide uppercase">
-                    {bookData.condition}
+                    {bookData.condition || 'Good'}
                   </span>
                 </div>
                 <p className="text-xl text-gray-600 italic mb-6">by {bookData.author}</p>
                 
                 <div className="flex space-x-4 mb-6 font-sans text-sm">
                   <span className="bg-[#f0f4eb] text-[#4a6023] py-1.5 px-4 rounded-lg font-semibold flex items-center">
-                    📍 {bookData.location}
+                    📍 {bookData.location || 'Unknown'}
                   </span>
                   <span className="bg-blue-50 text-blue-700 py-1.5 px-4 rounded-lg font-semibold flex items-center">
-                    📚 {bookData.genre}
+                    📚 {bookData.genre || 'Fiction'}
                   </span>
                 </div>
 
                 <div className="mb-8">
                   <h3 className="text-lg font-bold text-gray-800 mb-2">Synopsis</h3>
-                  <p className="text-gray-600 font-sans leading-relaxed">
-                    {bookData.description}
+                  <p className="text-gray-600 font-sans leading-relaxed whitespace-pre-line">
+                    {bookData.description || 'No description provided by the owner.'}
                   </p>
                 </div>
 
                 {/* OWNER DETAILS & RATING */}
                 <div className="flex items-center space-x-3 bg-gray-50 p-4 rounded-xl border border-gray-100 w-max mb-8">
                   <div className="w-10 h-10 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center font-sans font-bold shadow-inner">
-                    SR
+                    {getInitials(bookData.ownerName)}
                   </div>
                   <div>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-none mb-1">Owned By</p>
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-gray-800 font-sans">{bookData.owner}</p>
+                      <p className="text-sm font-bold text-gray-800 font-sans">{bookData.ownerName || 'Unknown Reader'}</p>
                       
                       {/* STAR RATING COMPONENT */}
                       <div className="flex items-center bg-[#5d782b]/10 px-1.5 py-0.5 rounded-md">
                         <svg className="w-3 h-3 text-yellow-500 fill-current" viewBox="0 0 20 20">
                           <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                         </svg>
-                        <span className="text-xs font-bold text-[#5d782b] ml-1">{bookData.ownerRating}</span>
+                        <span className="text-xs font-bold text-[#5d782b] ml-1">{bookData.ownerRating || 'New'}</span>
                       </div>
                     </div>
                   </div>
@@ -182,7 +281,7 @@ function BookDetailsPage() {
                     </svg>
                   </div>
                   <h2 className="text-3xl font-bold text-gray-800 mb-2">Request Sent!</h2>
-                  <p className="text-gray-600 font-sans">We've notified {bookData.owner}. Check your Chat soon!</p>
+                  <p className="text-gray-600 font-sans">We've notified {bookData.ownerName}. Check your Chat soon!</p>
                 </div>
               ) : myBookshelf.length === 0 ? (
                 <div className="py-6">
@@ -210,26 +309,55 @@ function BookDetailsPage() {
                   </div>
                 </div>
               ) : (
-                <div className="py-2">
-                  <h2 className="text-2xl font-bold text-gray-800 mb-2">Offer a Book</h2>
-                  <p className="text-gray-600 font-sans mb-6">Which book would you like to offer {bookData.owner} in exchange for <strong>{bookData.title}</strong>?</p>
+                <div className="py-2 text-left">
+                  <h2 className="text-2xl font-bold text-gray-800 mb-2 text-center">Offer a Book</h2>
+                  <p className="text-gray-600 font-sans mb-6 text-center text-sm">Which book would you like to offer {bookData.ownerName} in exchange for <strong>{bookData.title}</strong>?</p>
                   
-                  <div className="grid grid-cols-2 gap-4 mb-6">
-                    {/* Map through user's books here */}
+                  {/* Selectable Bookshelf Grid */}
+                  <div className="grid grid-cols-2 gap-3 mb-6 max-h-300px overflow-y-auto px-2 py-2">
+                    {myBookshelf.map((book) => (
+                      <div 
+                        key={book.id}
+                        onClick={() => setSelectedBookToOffer(book)}
+                        className={`border-2 rounded-xl p-3 cursor-pointer transition-all flex flex-col items-center text-center ${
+                          selectedBookToOffer?.id === book.id 
+                            ? 'border-[#5a7034] bg-[#5a7034]/5 shadow-md scale-105' 
+                            : 'border-gray-200 hover:border-[#5a7034]/50'
+                        }`}
+                      >
+                         <div className="w-16 h-24 bg-gray-200 rounded shadow-sm mb-2 overflow-hidden flex items-center justify-center">
+                           {book.coverUrl ? (
+                             <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" />
+                           ) : (
+                             <span className="text-[8px] font-sans font-bold text-gray-500 px-1">{book.title}</span>
+                           )}
+                         </div>
+                         <h4 className="text-xs font-bold text-gray-800 line-clamp-2 leading-tight">{book.title}</h4>
+                      </div>
+                    ))}
                   </div>
 
                   <div className="flex space-x-3">
                     <button 
-                      onClick={() => setIsModalOpen(false)}
-                      className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-sans font-bold transition-colors"
+                      onClick={() => {
+                        setIsModalOpen(false);
+                        setSelectedBookToOffer(null);
+                      }}
+                      disabled={isSubmitting}
+                      className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-sans font-bold transition-colors disabled:opacity-50"
                     >
                       Cancel
                     </button>
                     <button 
                       onClick={confirmSwap}
-                      className="flex-1 bg-[#5a7034] hover:bg-[#465728] text-white py-3 rounded-xl font-sans font-bold transition-colors"
+                      disabled={!selectedBookToOffer || isSubmitting}
+                      className={`flex-1 py-3 rounded-xl font-sans font-bold transition-colors ${
+                        !selectedBookToOffer || isSubmitting
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-[#5a7034] hover:bg-[#465728] text-white'
+                      }`}
                     >
-                      Send Request
+                      {isSubmitting ? 'Sending...' : 'Send Request'}
                     </button>
                   </div>
                 </div>

@@ -1,25 +1,103 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth'; // Added sendPasswordResetEmail
+import { collection, getDocs } from 'firebase/firestore';
+
+// CORRECTED: Moved up one folder level to find firebase.js in src/
+import { auth, db } from '../firebase'; 
 
 function LoginPage() {
+  const [users, setUsers] = useState([]); 
   const [selectedBook, setSelectedBook] = useState(null);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [resetMessage, setResetMessage] = useState(''); // Added state for password reset success
+  const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingBooks, setIsFetchingBooks] = useState(true); 
+  
   const navigate = useNavigate();
 
-  // A single generic profile so you can still test the login animation!
-  const users = [
-    { id: 1, name: "My Profile", image: "profile.png" },
-  ];
+  // Fetch user profiles from Firestore when the component loads
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const usersCollection = collection(db, 'users');
+        const userSnapshot = await getDocs(usersCollection);
+        
+        const userList = userSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data() // Spreads fields like name, email, image
+        }));
+        
+        setUsers(userList);
+      } catch (err) {
+        console.error("Error fetching books:", err);
+      } finally {
+        setIsFetchingBooks(false);
+      }
+    };
+
+    fetchUsers();
+  }, []);
 
   const handleBookClick = (user) => {
     setSelectedBook(user);
     setPassword('');
     setShowPassword(false);
+    setError(''); // Clear errors when switching books
+    setResetMessage(''); // Clear reset message when switching books
   };
 
-  const handleLogin = () => {
-    alert(`Logged in as ${selectedBook.name}!`);
+  // Handle the actual Firebase login
+  const handleLogin = async () => {
+    if (!password) {
+      setError('Please enter a password.');
+      return;
+    }
+
+    setIsLoading(true);
+    setError('');
+    setResetMessage('');
+
+    try {
+      await signInWithEmailAndPassword(auth, selectedBook.email, password);
+      // Navigate to the protected home/dashboard page upon success
+      navigate('/home'); 
+    } catch (err) {
+      console.error("Login Error:", err);
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+        setError('Incorrect password or user not found.');
+      } else {
+        setError('Failed to log in. Please try again.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle Forgot Password
+  const handleForgotPassword = async (e) => {
+    e.preventDefault(); // Prevents page jump
+
+    if (!selectedBook || !selectedBook.email) {
+      setError('Please select a book first.');
+      return;
+    }
+
+    setIsLoading(true);
+    setError('');
+    setResetMessage('');
+
+    try {
+      await sendPasswordResetEmail(auth, selectedBook.email);
+      setResetMessage(`A password reset link has been sent to ${selectedBook.email}.`);
+    } catch (err) {
+      console.error("Password Reset Error:", err);
+      setError('Failed to send reset email. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -32,7 +110,7 @@ function LoginPage() {
         
         {/* Bookshelf Background Image */}
         <img 
-          src="bookshelf.png" 
+          src="../bookshelf.png" 
           alt="3D Bookshelf Background" 
           className="absolute inset-0 w-full h-full object-cover z-0 object-center" 
         />
@@ -45,44 +123,54 @@ function LoginPage() {
           Pick Your Favourite Book
         </h2>
 
-        {/* --- TOP ROW --- */}
-        <div className="absolute top-[42%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">
+        {/* --- TOP ROW --- 
+            ADJUSTMENT TIP: Change `top-[42%]` to nudge the whole row up or down to sit exactly on your background image's top shelf. */}
+        <div className="absolute top-[46%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end drop-shadow-2xl">
           
-          {/* The Single Profile Book */}
-          {users.map((user) => (
-            <div
-              key={user.id}
-              onClick={() => handleBookClick(user)}
-              className={`w-20 h-32 md:w-24 md:h-36 bg-white rounded-sm cursor-pointer transition-all duration-300 transform shadow-lg overflow-hidden border-2 origin-bottom ${
-                selectedBook?.id === user.id 
-                  ? '-translate-y-4 border-[#9db490] ring-4 ring-[#9db490]/50 shadow-2xl scale-110' 
-                  : 'border-transparent hover:-translate-y-2 hover:shadow-xl'
-              }`}
-              title={user.name}
-            >
-              <img 
-                src={user.image} 
-                alt={user.name} 
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  e.target.style.display = 'none';
-                  e.target.parentElement.classList.add('flex', 'items-center', 'justify-center', 'bg-[#c5d1bb]', 'text-xs', 'font-bold', 'text-center');
-                  e.target.parentElement.innerText = user.name;
-                }}
-              />
+          {isFetchingBooks ? (
+            <div className="text-white bg-black/50 px-4 py-2 rounded-md z-10 font-sans">
+              Dusting the shelves...
             </div>
-          ))}
+          ) : (
+            <>
+              {/* Render dynamically fetched users */}
+              {users.map((user) => (
+                <div
+                  key={user.id}
+                  onClick={() => handleBookClick(user)}
+                  className={`w-20 h-32 md:w-24 md:h-36 bg-white rounded-sm cursor-pointer transition-all duration-300 transform shadow-lg overflow-hidden border-2 origin-bottom ${
+                    selectedBook?.id === user.id 
+                      ? '-translate-y-4 border-[#9db490] ring-4 ring-[#9db490]/50 shadow-2xl scale-110' 
+                      : 'border-transparent hover:-translate-y-2 hover:shadow-xl'
+                  }`}
+                  title={user.name}
+                >
+                  <img 
+                    src={user.image || "../default_profile.png"} 
+                    alt={user.name} 
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      e.target.style.display = 'none';
+                      e.target.parentElement.classList.add('flex', 'items-center', 'justify-center', 'bg-[#c5d1bb]', 'text-xs', 'font-bold', 'text-center');
+                      e.target.parentElement.innerText = user.name || "Unknown";
+                    }}
+                  />
+                </div>
+              ))}
 
-          {/* 2 Empty Slots on Top Shelf */}
-          {[2, 3].map((i) => (
-            <div key={i} className="w-20 h-32 md:w-24 md:h-36 bg-[#f0f0f0] border-2 border-[#ccc] rounded-sm flex items-center justify-center opacity-80 cursor-not-allowed shadow-md">
-              <span className="text-3xl text-gray-400">👤</span>
-            </div>
-          ))}
+              {/* Fill remaining slots to maintain layout on the top shelf */}
+              {Array.from({ length: Math.max(0, 3 - users.length) }).map((_, i) => (
+                <div key={`empty-top-${i}`} className="w-20 h-32 md:w-24 md:h-36 bg-[#f0f0f0] border-2 border-[#ccc] rounded-sm flex items-center justify-center opacity-80 cursor-not-allowed shadow-md">
+                  <span className="text-3xl text-gray-400">👤</span>
+                </div>
+              ))}
+            </>
+          )}
         </div>
 
-        {/* --- BOTTOM ROW --- */}
-        <div className="absolute top-[67%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">
+        {/* --- BOTTOM ROW --- 
+            ADJUSTMENT TIP: Change `top-[67%]` to nudge the whole row up or down to sit exactly on your background image's bottom shelf. */}
+        <div className="absolute top-[70%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end drop-shadow-2xl">
           {/* 3 Empty Slots on Bottom Shelf */}
           {[4, 5, 6].map((i) => (
             <div key={i} className="w-20 h-32 md:w-24 md:h-36 bg-[#f0f0f0] border-2 border-[#ccc] rounded-sm flex items-center justify-center opacity-80 cursor-not-allowed shadow-md">
@@ -99,7 +187,7 @@ function LoginPage() {
         
         {/* Top: Logo */}
         <div className="mt-8 flex flex-col items-center w-full">
-          <img src="logo.png" className="w-64 md:w-80 drop-shadow-md" alt="The Book Parlor" />
+          <img src="../logo.png" className="w-64 md:w-80 drop-shadow-md" alt="The Book Parlor" />
         </div>
 
         {/* Middle: Login Section */}
@@ -117,29 +205,49 @@ function LoginPage() {
                   <input
                     type={showPassword ? "text" : "password"}
                     placeholder={`Password for ${selectedBook.name}`}
-                    className="flex-1 py-3 pl-6 pr-2 bg-transparent text-white placeholder-white/70 focus:outline-none text-left text-lg"
+                    className="flex-1 py-3 pl-6 pr-2 bg-transparent text-white placeholder-white/70 focus:outline-none text-left text-lg font-sans"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleLogin()} 
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="mr-2 px-4 py-1.5 text-sm font-bold text-white bg-[#5d782b]/70 hover:bg-[#5d782b] rounded-full transition-colors shadow-sm"
+                    className="mr-2 px-4 py-1.5 text-sm font-bold text-white bg-[#5d782b]/70 hover:bg-[#5d782b] rounded-full transition-colors shadow-sm font-sans"
                   >
                     {showPassword ? "Hide" : "Show"}
                   </button>
                 </div>
+
+                {/* --- Error Message Display --- */}
+                {error && (
+                  <div className="w-full mb-4 text-red-200 text-sm font-semibold text-center bg-red-900/40 py-2 rounded-lg font-sans px-2">
+                    {error}
+                  </div>
+                )}
+
+                {/* --- Success Message Display --- */}
+                {resetMessage && (
+                  <div className="w-full mb-4 text-green-200 text-sm font-semibold text-center bg-green-900/40 py-2 rounded-lg font-sans px-2">
+                    {resetMessage}
+                  </div>
+                )}
                 
                 {/* Login Button */}
                 <button 
                   onClick={handleLogin}
-                  className="w-full py-3 mb-3 bg-[#5d782b] hover:bg-[#222] text-white rounded-full text-lg font-semibold shadow-md transition-colors"
+                  disabled={isLoading}
+                  className={`w-full py-3 mb-3 bg-[#5d782b] hover:bg-[#222] text-white rounded-full text-lg font-semibold shadow-md transition-colors font-sans ${isLoading ? 'opacity-70 cursor-wait' : ''}`}
                 >
-                  Login
+                  {isLoading ? 'Processing...' : 'Login'}
                 </button>
 
                 {/* Forgot Password Link */}
-                <a href="#" className="text-sm underline opacity-80 hover:opacity-100 hover:text-white transition-opacity">
+                <a 
+                  href="#" 
+                  onClick={handleForgotPassword}
+                  className="text-sm underline opacity-80 hover:opacity-100 hover:text-white transition-opacity font-sans"
+                >
                   Forgot password?
                 </a>
               </div>
@@ -158,7 +266,7 @@ function LoginPage() {
           </p>
           <button 
             onClick={() => navigate('/signup')}
-            className="w-full py-3 bg-[#5d782b] hover:bg-[#4a6023] text-white rounded-full text-lg font-semibold shadow-md transition-colors transform hover:scale-[1.02]"
+            className="w-full py-3 bg-[#5d782b] hover:bg-[#4a6023] text-white rounded-full text-lg font-semibold shadow-md transition-colors transform hover:scale-[1.02] font-sans"
           >
             Sign Up
           </button>

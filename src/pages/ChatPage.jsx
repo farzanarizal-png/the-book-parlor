@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { db } from '../firebase'; // Make sure your firebase.js is correctly configured
+import { auth, db } from '../firebase'; // Ensure auth is imported
+import { onAuthStateChanged } from 'firebase/auth';
 import { 
   collection, 
   query, 
@@ -15,26 +16,41 @@ function ChatPage() {
   const location = useLocation();
   const scrollRef = useRef();
 
-  // 1. DATA FROM NAVIGATION STATE (Passed from BookDetailsPage)
+  // 1. DATA FROM NAVIGATION STATE (Passed from BookDetailsPage or Inbox)
   const ownerName = location.state?.ownerName;
+  const ownerId = location.state?.ownerId;             // Highly recommended to pass this!
   const bookTitle = location.state?.bookTitle;         // Their book
   const myOfferedBook = location.state?.myOfferedBook; // Your book
   
   // If ownerName exists, we are in a 1-on-1 chat. Otherwise, we show the Inbox.
   const isDirectChat = Boolean(ownerName);
   
-  // Create a unique Room ID based on the owner's name
-  const chatId = ownerName ? `chat_${ownerName.replace(/\s+/g, '_')}` : null;
-
   // 2. COMPONENT STATES
+  const [currentUser, setCurrentUser] = useState(null);
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState("");
   const [showMeetupModal, setShowMeetupModal] = useState(false);
   const [meetupDetails, setMeetupDetails] = useState({ date: '', time: '', location: '' });
 
+  // Handle Authentication State
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Create a more robust unique Room ID (Prevents everyone chatting with "Sarah" from sharing the same room)
+  // It uses the passed chatId, OR combines the two user IDs, OR falls back to the old ownerName logic.
+  const chatId = location.state?.chatId 
+    ? location.state.chatId 
+    : (currentUser?.uid && ownerId) 
+      ? [currentUser.uid, ownerId].sort().join('_') 
+      : ownerName ? `chat_${ownerName.replace(/\s+/g, '_')}` : null;
+
   // 3. REAL-TIME FIREBASE LISTENER
   useEffect(() => {
-    if (!isDirectChat || !chatId) return;
+    if (!isDirectChat || !chatId || !currentUser) return;
 
     const q = query(
       collection(db, "chats", chatId, "messages"),
@@ -50,7 +66,7 @@ function ChatPage() {
     });
 
     return () => unsubscribe(); // Cleanup listener when leaving page
-  }, [chatId, isDirectChat]);
+  }, [chatId, isDirectChat, currentUser]);
 
   // 4. AUTO-SCROLL TO NEWEST MESSAGE
   useEffect(() => {
@@ -60,10 +76,10 @@ function ChatPage() {
   // 5. SEND STANDARD TEXT MESSAGE
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || !currentUser) return;
 
     await addDoc(collection(db, "chats", chatId, "messages"), {
-      sender: 'me',
+      senderId: currentUser.uid, // Replaced hardcoded 'me' with actual User ID
       text: inputText,
       createdAt: serverTimestamp(),
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -77,15 +93,16 @@ function ChatPage() {
       alert("Please fill in the meeting date and location.");
       return;
     }
+    if (!currentUser) return;
 
     const proposalText = `📅 PROPOSED MEETUP\nDate: ${meetupDetails.date}\nTime: ${meetupDetails.time}\nLocation: ${meetupDetails.location}`;
     
     await addDoc(collection(db, "chats", chatId, "messages"), {
-      sender: 'me',
+      senderId: currentUser.uid, // Replaced hardcoded 'me'
       text: proposalText,
       createdAt: serverTimestamp(),
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      type: 'meetup' // Custom type to style it as a card
+      type: 'meetup' 
     });
     
     setShowMeetupModal(false);
@@ -137,8 +154,9 @@ function ChatPage() {
       {/* MESSAGES THREAD */}
       <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
         {messages.map((msg) => {
-          const isMe = msg.sender === 'me';
-          const isSystem = msg.sender === 'system';
+          // Changed logic: Compare msg sender ID to the logged-in user's ID
+          const isMe = msg.senderId === currentUser?.uid;
+          const isSystem = msg.senderId === 'system';
           const isMeetup = msg.type === 'meetup';
 
           return (

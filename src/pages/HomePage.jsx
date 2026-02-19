@@ -1,74 +1,26 @@
-import React, { useState } from 'react';   
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-// New User: Empty Bookshelf
-const myBookshelf = [];
-
-// UPDATED: Added ownerRating and standardized status to match BookDetailsPage
-const recommendedBooks = [
-  { 
-    id: 5, 
-    title: "The Silent Patient", 
-    author: "Alex Michaelides", 
-    location: "Kuala Lumpur", 
-    owner: "Sarah", 
-    ownerAvatar: "SA", 
-    ownerRating: 4.8,
-    status: "Available", 
-    condition: "Like New",
-    genre: "Mystery/Thriller",
-    description: "Alicia Berenson’s life is seemingly perfect. A famous painter married to an in-demand fashion photographer, she lives in a grand house with big windows overlooking a park in one of London’s most desirable areas. One evening her husband returns home late from a fashion shoot, and Alicia shoots him five times in the face, and then never speaks another word." 
-  },
-  { 
-    id: 6, 
-    title: "Dune", 
-    author: "Frank Herbert", 
-    location: "Selangor", 
-    owner: "Ahmad", 
-    ownerAvatar: "AH",
-    ownerRating: 4.2,
-    status: "Reserved", // Changed from "Pending Swap" to match logic
-    condition: "Good / Lightly Read",
-    genre: "Sci-Fi",
-    description: "Set on the desert planet Arrakis, Dune is the story of the boy Paul Atreides, heir to a noble family tasked with ruling an inhospitable world where the only thing of value is the 'spice' melange, a drug capable of extending life and enhancing consciousness." 
-  },
-  { 
-    id: 7, 
-    title: "Atomic Habits", 
-    author: "James Clear", 
-    location: "Penang", 
-    owner: "Lee", 
-    ownerAvatar: "LE",
-    ownerRating: 5.0,
-    status: "Available", 
-    condition: "Brand New",
-    genre: "Self-Help",
-    description: "No matter your goals, Atomic Habits offers a proven framework for improving every day. James Clear, one of the world's leading experts on habit formation, reveals practical strategies that will teach you exactly how to form good habits, break bad ones, and master the tiny behaviors that lead to remarkable results." 
-  },
-  { 
-    id: 8, 
-    title: "1984", 
-    author: "George Orwell", 
-    location: "Kuala Lumpur", 
-    owner: "Hayden", 
-    ownerAvatar: "HA",
-    ownerRating: 4.5,
-    status: "Available", 
-    condition: "Acceptable / Heavily Read",
-    genre: "Classic / Dystopian",
-    description: "Winston Smith toes the Party line, rewriting history to satisfy the Ministry of Truth. With every lie he writes, Winston grows to hate the Party that seeks power for its own sake and persecutes those who dare to commit thoughtcrime. But as he begins to think for himself, Winston can’t escape the fact that Big Brother is always watching." 
-  },
-];
+// --- FIREBASE IMPORTS ---
+import { auth, db } from '../firebase'; // Adjust path if necessary
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore'; // Added doc, getDoc
+import { onAuthStateChanged } from 'firebase/auth';
 
 function HomePage() {
   const navigate = useNavigate();
+
+  // --- FIREBASE DATA STATES ---
+  const [myBookshelf, setMyBookshelf] = useState([]);
+  const [recommendedBooks, setRecommendedBooks] = useState([]);
+  const [userName, setUserName] = useState("Reader"); // Fallback name
+  const [isLoading, setIsLoading] = useState(true);
 
   // UI States
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   
-  // --- NEW: Search State ---
+  // Search State
   const [searchQuery, setSearchQuery] = useState('');
   
   // Notification State
@@ -79,9 +31,62 @@ function HomePage() {
 
   const hasUnread = notifications.some(n => n.unread);
 
+  // --- FETCH BOOKS & USER DATA FROM FIREBASE ---
+  useEffect(() => {
+    // Listen for login status
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          // 1. Fetch the actual user's name from Firestore
+          const userDocRef = doc(db, 'users', user.uid);
+          const userDocSnap = await getDoc(userDocRef);
+          
+          if (userDocSnap.exists() && userDocSnap.data().name) {
+            setUserName(userDocSnap.data().name); // Uses actual username!
+          } else if (user.displayName) {
+            setUserName(user.displayName); // Fallback to Auth profile
+          } else {
+            // Final fallback to email if no profile data exists
+            setUserName(user.email ? user.email.split('@')[0] : "Reader");
+          }
+
+          // 2. Fetch Books
+          const booksCollection = collection(db, 'books');
+          const bookSnapshot = await getDocs(booksCollection);
+          
+          const allBooks = bookSnapshot.docs.map(bookDoc => ({
+            id: bookDoc.id,
+            ...bookDoc.data()
+          }));
+
+          // Split books into "My Shelf" and "Community (Recommended)"
+          const myBooks = allBooks.filter(book => book.ownerId === user.uid);
+          const communityBooks = allBooks.filter(book => book.ownerId !== user.uid);
+
+          setMyBookshelf(myBooks);
+          setRecommendedBooks(communityBooks);
+        } catch (error) {
+          console.error("Error fetching data from Firebase:", error);
+        } finally {
+          setIsLoading(false);
+        }
+      } else {
+        // If not logged in, redirect to login page
+        navigate('/login');
+      }
+    });
+
+    return () => unsubscribe(); // Cleanup listener on unmount
+  }, [navigate]);
+
   // --- Handlers ---
-  const handleSignOut = () => {
-    navigate('/login');
+  const handleSignOut = async () => {
+    try {
+      await auth.signOut();
+      navigate('/login');
+    } catch (error) {
+      console.error("Error signing out:", error);
+    }
   };
 
   const toggleNotifications = () => {
@@ -103,7 +108,7 @@ function HomePage() {
 
   const toggleFilter = () => {
     setIsFilterOpen(!isFilterOpen);
-    setIsNotifOpen(false);     
+    setIsNotifOpen(false);      
     setIsDropdownOpen(false);  
   };
 
@@ -116,23 +121,27 @@ function HomePage() {
     if (item === 'Rating') navigate('/rating');
   };
 
-  // --- NEW: Filter books based on search query ---
+  // --- Filter books based on search query ---
   const filteredRecommendedBooks = recommendedBooks.filter((book) => {
-    if (!searchQuery) return true; // If search is empty, show all
+    if (!searchQuery) return true; 
     
     const lowerCaseQuery = searchQuery.toLowerCase();
     return (
-      book.title.toLowerCase().includes(lowerCaseQuery) ||
-      book.author.toLowerCase().includes(lowerCaseQuery) ||
-      book.genre.toLowerCase().includes(lowerCaseQuery)
+      (book.title && book.title.toLowerCase().includes(lowerCaseQuery)) ||
+      (book.author && book.author.toLowerCase().includes(lowerCaseQuery)) ||
+      (book.genre && book.genre.toLowerCase().includes(lowerCaseQuery))
     );
   });
+
+  if (isLoading) {
+    return <div className="flex h-screen items-center justify-center bg-[#faf6e9] font-serif text-2xl">Loading your parlor...</div>;
+  }
 
   return (
     <div className="flex h-screen bg-[#faf6e9] font-serif overflow-hidden">
       
       {/* --- SIDEBAR --- */}
-      <div className="w-64 bg-[#b5c5d1] flex flex-col items-center py-8 z-20 shadow-lg">
+      <div className="w-64 bg-[#b5c5d1] flex flex-col items-center py-8 z-20 shadow-lg shrink-0">
         <div className="bg-[#faf6e9] rounded-2xl p-4 mb-10 w-4/5 shadow-sm flex justify-center cursor-pointer transition-transform hover:scale-105">
           <img src="logo.png" alt="The Book Parlor" className="w-full h-auto" />
         </div>
@@ -159,8 +168,8 @@ function HomePage() {
         
         {/* --- HEADER SECTION --- */}
         <div className="px-10 pt-10 pb-6 z-30 bg-[#dde5eb]">
-          <h1 className="text-5xl italic font-bold text-gray-800 mb-2 drop-shadow-sm">
-            Welcome, Hayden !
+          <h1 className="text-5xl italic font-bold text-gray-800 mb-2 drop-shadow-sm capitalize">
+            Welcome, {userName}!
           </h1>
           <p className="text-2xl text-gray-600 mb-8">Ready to Trade?</p>
 
@@ -171,7 +180,6 @@ function HomePage() {
               <svg className="w-6 h-6 text-gray-400 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
-              {/* --- UPDATED: Search Input bound to state --- */}
               <input 
                 type="text"
                 value={searchQuery}
@@ -203,14 +211,6 @@ function HomePage() {
                       <option>Kuala Lumpur</option>
                       <option>Selangor</option>
                       <option>Penang</option>
-                      <option>Perak</option>
-                      <option>Kedah</option>
-                      <option>Kelantan</option>
-                      <option>Pahang</option>
-                      <option>Terengganu</option>
-                      <option>Perlis</option>
-                      <option>Melaka</option>  
-                      <option>Negeri Sembilan</option>
                       <option>Johor</option>
                     </select>
                   </div>
@@ -291,10 +291,10 @@ function HomePage() {
               {/* PROFILE DROPDOWN */}
               <div className="relative">
                 <div className="flex items-center space-x-2 cursor-pointer ml-4 group" onClick={toggleProfileDropdown}>
-                  <div className="w-10 h-10 rounded-full bg-[#f97316] text-white flex items-center justify-center font-sans font-bold text-sm shadow-sm">
-                    HA
+                  <div className="w-10 h-10 rounded-full bg-[#f97316] text-white flex items-center justify-center font-sans font-bold text-sm shadow-sm uppercase">
+                    {userName.substring(0, 2)}
                   </div>
-                  <span className="text-xl text-gray-800">Hayden</span>
+                  <span className="text-xl text-gray-800 capitalize">{userName}</span>
                   <svg className={`w-5 h-5 text-gray-800 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
                   </svg>
@@ -327,11 +327,14 @@ function HomePage() {
         {/* Scrollable Content Area */}
         <div className="flex-1 overflow-y-auto px-10 pt-6 pb-32 hide-scrollbar z-10 bg-[#faf6e9]">
           
-          {/* --- MY BOOKSHELF (NEW USER EMPTY STATE) --- */}
+          {/* --- MY BOOKSHELF --- */}
           <div className="bg-[#a3b19b] rounded-t-2rem p-8 pb-10 shadow-inner min-h-300px">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-3xl font-bold text-gray-800">My Bookshelf</h2>
-              <button className="bg-[#5a7034] hover:bg-[#465728] text-white px-6 py-2 rounded-full text-lg transition-colors shadow-md">
+              <button 
+                onClick={() => navigate('/profile')} 
+                className="bg-[#5a7034] hover:bg-[#465728] text-white px-6 py-2 rounded-full text-lg transition-colors shadow-md"
+              >
                 See All {'>'}
               </button>
             </div>
@@ -349,7 +352,29 @@ function HomePage() {
               </div>
             ) : (
               <div className="flex space-x-8 overflow-x-auto pb-6 hide-scrollbar">
-                {/* Book items go here */}
+                {myBookshelf.map((book) => (
+                  <div 
+                    key={book.id} 
+                    onClick={() => navigate(`/book/${book.id}`)} 
+                    className="flex flex-col items-center min-w-140px group cursor-pointer relative"
+                  >
+                    <div className="w-32 h-48 bg-[#cad3c3] relative flex items-center justify-center rounded-md shadow-md mb-4 transition-transform duration-300 group-hover:-translate-y-2 group-hover:shadow-xl overflow-hidden border border-white/20 text-center px-2">
+                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase tracking-widest shadow-md z-10 ${
+                        book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'
+                      }`}>
+                        {book.status || 'Available'}
+                      </div>
+                      
+                      {book.coverUrl ? (
+                         <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" />
+                      ) : (
+                         <span className="text-gray-600 text-sm font-sans font-medium leading-snug z-10">{book.title}</span>
+                      )}
+                    </div>
+                    <h3 className="font-bold text-gray-900 text-center leading-tight mb-1 text-sm">{book.title}</h3>
+                    <p className="text-gray-700 text-xs text-center">{book.author}</p>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -359,7 +384,6 @@ function HomePage() {
             <h2 className="text-3xl font-bold text-gray-800 mb-6">Recommended</h2>
             
             <div className="flex space-x-8 overflow-x-auto pb-6 hide-scrollbar">
-              {/* --- UPDATED: Map over filteredRecommendedBooks instead of recommendedBooks --- */}
               {filteredRecommendedBooks.length > 0 ? (
                 filteredRecommendedBooks.map((book) => (
                   <div 
@@ -367,34 +391,37 @@ function HomePage() {
                     onClick={() => navigate(`/book/${book.id}`)} 
                     className="flex flex-col items-center min-w-140px group cursor-pointer relative"
                   >
-                    {/* Book Cover Visual with Status Badge */}
                     <div className="w-32 h-48 bg-[#cad3c3] relative flex items-center justify-center rounded-md shadow-md mb-4 transition-transform duration-300 group-hover:-translate-y-2 group-hover:shadow-xl overflow-hidden border border-white/20 text-center px-2">
-                      
-                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase tracking-widest shadow-md ${
+                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase tracking-widest shadow-md z-10 ${
                         book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'
                       }`}>
-                        {book.status}
+                        {book.status || 'Available'}
                       </div>
 
-                      <span className="text-gray-600 text-sm font-sans font-medium leading-snug">{book.title}</span>
+                      {book.coverUrl ? (
+                        <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" />
+                      ) : (
+                        <span className="text-gray-600 text-sm font-sans font-medium leading-snug z-10">{book.title}</span>
+                      )}
                     </div>
 
-                    {/* Book Information */}
                     <h3 className="font-bold text-gray-900 text-center leading-tight mb-1 text-sm">{book.title}</h3>
                     <p className="text-gray-700 text-xs text-center">{book.author}</p>
                     
                     {/* Owner with Rating Stars */}
                     <div className="flex items-center justify-center gap-1 mt-1">
-                      <p className="text-gray-800 text-xs text-center font-bold">Owner: {book.owner}</p>
+                      <p className="text-gray-800 text-xs text-center font-bold">
+                        Owner: {book.ownerEmail ? book.ownerEmail.split('@')[0] : book.ownerName || 'Unknown'}
+                      </p>
                       <div className="flex items-center">
                         <svg className="w-2.5 h-2.5 text-yellow-500 fill-current" viewBox="0 0 20 20">
                           <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                         </svg>
-                        <span className="text-[10px] font-bold text-[#5d782b] ml-0.5">{book.ownerRating}</span>
+                        <span className="text-[10px] font-bold text-[#5d782b] ml-0.5">{book.ownerRating || "5.0"}</span>
                       </div>
                     </div>
                     
-                    <p className="text-gray-600 text-[10px] italic text-center mt-0.5">{book.location}</p>
+                    <p className="text-gray-600 text-[10px] italic text-center mt-0.5">{book.location || 'Unknown Location'}</p>
                   </div>
                 ))
               ) : (

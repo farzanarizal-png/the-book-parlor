@@ -1,9 +1,10 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-// --- NEW: Import Firebase database functions ---
-import { db } from '../firebase'; // Adjust the '../' if your firebase.js is in a different folder
+// --- FIREBASE IMPORTS ---
+import { auth, db, storage } from '../firebase'; 
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 function AddBookPage() {
   const navigate = useNavigate();
@@ -19,15 +20,17 @@ function AddBookPage() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [isSaving, setIsSaving] = useState(false); // <-- NEW: Loading state for saving
+  const [isSaving, setIsSaving] = useState(false); 
   
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
   const [genre, setGenre] = useState('');
-  // --- UPDATED: Set default condition to one of your new options ---
   const [condition, setCondition] = useState('Good / Lightly Read');
   const [synopsis, setSynopsis] = useState('');
-  const [coverUrl, setCoverUrl] = useState('');
+  
+  // States for handling images
+  const [coverUrl, setCoverUrl] = useState(''); // Stores Google API URL or local preview URL
+  const [imageFile, setImageFile] = useState(null); // Stores the actual file if user uploads one manually
 
   // --- Google Books API Search ---
   const handleSearch = async (e) => {
@@ -54,6 +57,7 @@ function AddBookPage() {
         
         const image = book.imageLinks?.thumbnail?.replace('http:', 'https:') || '';
         setCoverUrl(image);
+        setImageFile(null); // Clear any manual file if they use Google search
       } else {
         alert("Book not found in Google's database. No worries! You can type the details manually and upload your own cover.");
       }
@@ -69,31 +73,53 @@ function AddBookPage() {
   const handleImageUpload = (event) => {
     const file = event.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setCoverUrl(reader.result); 
-      };
-      reader.readAsDataURL(file);
+      setImageFile(file); // Save the actual file to state for uploading later
+      setCoverUrl(URL.createObjectURL(file)); // Create a temporary local URL just for the preview window
     }
   };
 
-  // --- NEW: Save to Firebase Firestore ---
+  // --- Save to Firebase Firestore & Storage ---
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    // Safety check: ensure someone is logged in
+    if (!auth.currentUser) {
+      alert("You must be logged in to add a book.");
+      return;
+    }
+
     setIsSaving(true);
 
     try {
-      // Create a new document in the "books" collection
+      let finalCoverUrl = coverUrl;
+
+      // 1. If the user uploaded a custom image file, send it to Firebase Storage first
+      if (imageFile) {
+        // Create a unique file name using the current timestamp
+        const fileRef = ref(storage, `book_covers/${Date.now()}_${imageFile.name}`);
+        
+        // Upload the file
+        const snapshot = await uploadBytes(fileRef, imageFile);
+        
+        // Get the permanent download URL from Storage
+        finalCoverUrl = await getDownloadURL(snapshot.ref);
+      }
+
+      // 2. Save all the text data + the permanent image URL to Firestore
       await addDoc(collection(db, 'books'), {
         title: title,
         author: author,
         genre: genre,
         condition: condition,
         synopsis: synopsis,
-        coverUrl: coverUrl,
-        status: "Available", // By default, new books are available to swap
-        ownerName: "Hayden", // HARDCODED for now until we set up Login!
-        createdAt: serverTimestamp() // Tags the exact time it was added
+        coverUrl: finalCoverUrl, // This will be either the Google link or the Firebase Storage link
+        status: "Available",
+        
+        // Use the authenticated user's ID and Email
+        ownerId: auth.currentUser.uid,
+        ownerEmail: auth.currentUser.email,
+        
+        createdAt: serverTimestamp() 
       });
 
       alert(`${title} has been successfully added to your bookshelf!`);
@@ -116,7 +142,7 @@ function AddBookPage() {
           onClick={() => navigate('/home')}
           className="bg-[#faf6e9] rounded-2xl p-4 mb-10 w-4/5 shadow-sm flex justify-center cursor-pointer transition-transform hover:scale-105"
         >
-          <img src="logo.png" alt="The Book Parlor" className="w-full h-auto" />
+          <img src="../logo.png" alt="The Book Parlor" className="w-full h-auto" />
         </div>
 
         <nav className="flex flex-col w-full text-center space-y-2 mt-4">
@@ -208,13 +234,12 @@ function AddBookPage() {
                     required
                     value={genre}
                     onChange={(e) => setGenre(e.target.value)}
-                    placeholder="e.g. Romantik, Thriller, Sci-Fi"
+                    placeholder="e.g. Romance, Thriller, Sci-Fi"
                     className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg font-sans focus:outline-none focus:border-[#5d782b]"
                   />
                 </div>
               </div>
 
-              {/* --- UPDATED: Condition Dropdown Options --- */}
               <div>
                 <label className="block text-gray-700 font-sans text-sm font-bold mb-2">Condition</label>
                 <select 

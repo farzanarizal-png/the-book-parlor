@@ -1,12 +1,21 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-function SignupPage() {
+// --- NEW: Firebase Imports ---
+import { auth, db } from '../firebase'; // Adjust the path if your firebase.js is elsewhere
+import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+
+function SignupPage() {   
   const [selectedSlot, setSelectedSlot] = useState(null);
   const [formData, setFormData] = useState({ email: '', username: '', password: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [uploadedImage, setUploadedImage] = useState(null); 
   
+  // --- NEW: Loading and Error States ---
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+
   const navigate = useNavigate();
 
   // All slots are now entirely empty and available!
@@ -16,12 +25,14 @@ function SignupPage() {
   const handleSlotClick = (slotId) => {
     setSelectedSlot(slotId);
     setFormData({ email: '', username: '', password: '' });
-    setUploadedImage(null); // Reset image when picking a new slot
+    setUploadedImage(null); 
+    setErrorMessage(''); // Clear errors on slot change
   };
 
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
+    setErrorMessage(''); // Clear errors when typing
   };
 
   const handleImageUpload = (e) => {
@@ -35,13 +46,54 @@ function SignupPage() {
     }
   };
 
-  const handleRegister = () => {
+  // --- UPDATED: Firebase Registration Logic ---
+  const handleRegister = async () => {
     if (!formData.email || !formData.username || !formData.password) {
-      alert('Please fill all fields!');
+      setErrorMessage('Please fill in all fields!');
       return;
     }
-    alert(`Account created for ${formData.username} in Slot ${selectedSlot}!`);
-    navigate('/login');
+
+    setIsLoading(true);
+    setErrorMessage('');
+
+    try {
+      // 1. Create the user in Firebase Authentication
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const user = userCredential.user;
+
+      // 2. Update the Auth profile with their Username
+      await updateProfile(user, {
+        displayName: formData.username
+      });
+
+      // 3. Save additional user details into Firestore Database
+      await setDoc(doc(db, 'users', user.uid), {
+        uid: user.uid,
+        username: formData.username,
+        email: formData.email,
+        bookshelfSlot: selectedSlot,
+        profileImage: uploadedImage || null, // Storing base64 string for the avatar
+        createdAt: serverTimestamp()
+      });
+
+      alert(`Account created successfully! Welcome, ${formData.username}.`);
+      
+      // Navigate to home immediately after successful signup
+      navigate('/home'); 
+
+    } catch (error) {
+      console.error("Error signing up:", error);
+      // Format Firebase error messages to be user-friendly
+      if (error.code === 'auth/email-already-in-use') {
+        setErrorMessage('This email is already registered. Try logging in.');
+      } else if (error.code === 'auth/weak-password') {
+        setErrorMessage('Password should be at least 6 characters.');
+      } else {
+        setErrorMessage('Failed to create account. Please try again.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -156,6 +208,13 @@ function SignupPage() {
             {selectedSlot ? (
               <div className="flex flex-col items-center w-full animate-in fade-in zoom-in duration-300">
                 
+                {/* --- NEW: Error Message Display --- */}
+                {errorMessage && (
+                  <div className="w-full bg-red-500/80 text-white text-sm py-2 px-4 rounded-lg mb-4 text-center font-sans shadow-sm">
+                    {errorMessage}
+                  </div>
+                )}
+
                 {/* Email Input */}
                 <input
                   type="email"
@@ -195,12 +254,13 @@ function SignupPage() {
                   </button>
                 </div>
                 
-                {/* Register Button */}
+                {/* --- UPDATED: Register Button with Loading State --- */}
                 <button 
                   onClick={handleRegister}
-                  className="w-full py-3 bg-[#5d782b] hover:bg-[#222] text-white rounded-full text-lg font-semibold shadow-md transition-colors"
+                  disabled={isLoading}
+                  className="w-full py-3 bg-[#5d782b] hover:bg-[#222] text-white rounded-full text-lg font-semibold shadow-md transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
                 >
-                  Register
+                  {isLoading ? "Creating Account..." : "Register"}
                 </button>
               </div>
             ) : (
