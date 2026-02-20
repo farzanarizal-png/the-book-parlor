@@ -16,7 +16,8 @@ function ProfilePage() {
     name: 'Reader',
     username: '@booklover',
     location: 'Unknown Location',
-    rating: '--%'
+    rating: '--%',
+    profileImage: null // ADDED: New state to hold the picture link!
   });
   const [myBooks, setMyBooks] = useState([]);
 
@@ -32,12 +33,14 @@ function ProfilePage() {
           let fetchedName = "Reader";
           let fetchedUsername = `@reader${user.uid.substring(0, 4)}`;
           let fetchedLocation = "Update your location";
+          let fetchedProfileImage = null; // ADDED: Variable to store the fetched image
 
           if (userDocSnap.exists()) {
             const data = userDocSnap.data();
             fetchedName = data.name || data.displayName || "Reader";
             fetchedUsername = data.username || `@${fetchedName.toLowerCase().replace(/\s/g, '')}`;
             fetchedLocation = data.location || "Location not set";
+            fetchedProfileImage = data.profileImage || null; // ADDED: Grab the ImgBB link from database!
           } else if (user.displayName) {
             fetchedName = user.displayName;
           } else if (user.email) {
@@ -48,7 +51,8 @@ function ProfilePage() {
             name: fetchedName,
             username: fetchedUsername,
             location: fetchedLocation,
-            rating: '--%' // You can update this later when you implement a rating system
+            rating: '--%', 
+            profileImage: fetchedProfileImage // ADDED: Save it to our state!
           });
 
           // 2. Fetch User's Bookshelf
@@ -92,7 +96,7 @@ function ProfilePage() {
     return <div className="flex h-screen items-center justify-center bg-[#faf6e9] font-serif text-2xl">Loading Profile...</div>;
   }
 
-  // Generate initials for the avatar (e.g., "Hayden" -> "HA", "John Doe" -> "JD")
+  // Generate initials for the avatar
   const getInitials = (name) => {
     const names = name.split(' ');
     if (names.length >= 2) return (names[0][0] + names[1][0]).toUpperCase();
@@ -135,8 +139,14 @@ function ProfilePage() {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10">
           
           <div className="flex items-center space-x-6">
-            <div className="w-28 h-28 rounded-full bg-[#f97316] text-white flex items-center justify-center font-sans font-bold text-4xl shadow-md border-4 border-[#faf6e9] uppercase">
-              {getInitials(userProfile.name)}
+            
+            {/* --- UPDATED AVATAR DISPLAY --- */}
+            <div className="w-28 h-28 rounded-full bg-[#f97316] text-white flex items-center justify-center font-sans font-bold text-4xl shadow-md border-4 border-[#faf6e9] uppercase overflow-hidden">
+              {userProfile.profileImage ? (
+                <img src={userProfile.profileImage} alt={userProfile.name} className="w-full h-full object-cover" />
+              ) : (
+                getInitials(userProfile.name)
+              )}
             </div>
             
             <div className="flex flex-col">

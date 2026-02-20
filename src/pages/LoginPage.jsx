@@ -125,7 +125,7 @@ function LoginPage() {
 
         {/* --- TOP ROW --- 
             ADJUSTMENT TIP: Change `top-[42%]` to nudge the whole row up or down to sit exactly on your background image's top shelf. */}
-        <div className="absolute top-[46%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end drop-shadow-2xl">
+        <div className="absolute top-[42%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end drop-shadow-2xl">
           
           {isFetchingBooks ? (
             <div className="text-white bg-black/50 px-4 py-2 rounded-md z-10 font-sans">
