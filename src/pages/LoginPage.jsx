@@ -108,8 +108,8 @@ function LoginPage() {
         <h2 className="absolute top-[20%] md:top-[22%] z-10 text-white text-4xl md:text-5xl italic drop-shadow-md text-center px-4" style={{ fontFamily: "'Georgia', serif" }}>
           Pick Your Book
         </h2>
-        <div className="absolute top-[42%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">{topRow.map((item, i) => <BookSlot key={item.id || i} item={item} />)}</div>
-        <div className="absolute top-[67%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">{bottomRow.map((item, i) => <BookSlot key={item.id || i} item={item} />)}</div>
+        <div className="absolute top-[44%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">{topRow.map((item, i) => <BookSlot key={item.id || i} item={item} />)}</div>
+        <div className="absolute top-[69%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">{bottomRow.map((item, i) => <BookSlot key={item.id || i} item={item} />)}</div>
       </div>
 
       {/* Right side: Login Form */}
