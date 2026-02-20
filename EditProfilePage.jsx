@@ -1,23 +1,55 @@
-import React, { useState, useRef } from 'react';   
+import React, { useState, useRef, useEffect } from 'react'; 
 import { useNavigate } from 'react-router-dom'; 
 
-// --- IF YOU ARE READY TO SAVE TO FIREBASE, UNCOMMENT THESE NEXT TWO LINES ---
-// import { auth, db } from '../firebase'; 
-// import { doc, updateDoc } from 'firebase/firestore';
+// --- FIREBASE IMPORTS ---
+import { auth, db } from '../firebase'; 
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
 function EditProfilePage() { 
   const navigate = useNavigate(); 
   const fileInputRef = useRef(null);  
 
-  const [name, setName] = useState('Hayden'); 
-  const [username, setUsername] = useState('bookworm_hayden'); 
+  // --- FORM STATES (Start empty, will be filled by database) ---
+  const [name, setName] = useState(''); 
+  const [username, setUsername] = useState(''); 
   const [location, setLocation] = useState('Kuala Lumpur'); 
   const [bio, setBio] = useState(''); 
   const [profileImage, setProfileImage] = useState(null);  
   
-  // --- ADDED: New states for Uploading ---
+  // --- UPLOAD & LOADING STATES ---
   const [imageFile, setImageFile] = useState(null); // Holds the actual file for ImgBB
   const [isSaving, setIsSaving] = useState(false);  // Handles the "Saving..." button
+  const [isLoading, setIsLoading] = useState(true); // Handles initial data load
+
+  // --- FETCH CURRENT PROFILE DATA ON LOAD ---
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          const userDocRef = doc(db, 'users', user.uid);
+          const userDocSnap = await getDoc(userDocRef);
+
+          if (userDocSnap.exists()) {
+            const data = userDocSnap.data();
+            setName(data.name || '');
+            setUsername(data.username || '');
+            setLocation(data.location || 'Kuala Lumpur');
+            setBio(data.bio || '');
+            setProfileImage(data.profileImage || null);
+          }
+        } catch (error) {
+          console.error("Error fetching user data:", error);
+        } finally {
+          setIsLoading(false);
+        }
+      } else {
+        navigate('/login');
+      }
+    });
+
+    return () => unsubscribe();
+  }, [navigate]);
 
   const handleNavigation = (item) => { 
     if (item === 'Home') navigate('/home'); 
@@ -31,7 +63,7 @@ function EditProfilePage() {
     fileInputRef.current.click();  
   }; 
 
-  // --- UPDATED: Now saves the actual file for ImgBB, and the DataURL for preview ---
+  // --- SHOW PREVIEW & PREP FOR IMGBB ---
   const handleImageChange = (event) => { 
     const file = event.target.files[0]; 
     if (file) { 
@@ -45,12 +77,14 @@ function EditProfilePage() {
     } 
   }; 
 
-  // --- UPDATED: Full ImgBB Upload & Save Logic ---
+  // --- UPLOAD TO IMGBB & SAVE TO FIRESTORE ---
   const handleSave = async (e) => { 
     e.preventDefault(); 
-    setIsSaving(true); // Changes button to "Saving..."
+    setIsSaving(true); 
 
     try {
+      if (!auth.currentUser) throw new Error("No user logged in");
+
       let finalImageUrl = profileImage; // Default to existing image if they didn't pick a new one
 
       // 1. If they picked a new image, send it to ImgBB
@@ -74,31 +108,38 @@ function EditProfilePage() {
         }
       }
 
-      // 2. Save everything to your database
-      // --- UNCOMMENT THIS BLOCK IF FIREBASE IS IMPORTED AT THE TOP ---
-      /*
-      if (auth.currentUser) {
-        const userRef = doc(db, "users", auth.currentUser.uid);
-        await updateDoc(userRef, {
-          name: name,
-          username: username,
-          location: location,
-          bio: bio,
-          profileImage: finalImageUrl
-        });
-      }
-      */
+      // 2. Save everything to your Firestore database
+      const userRef = doc(db, "users", auth.currentUser.uid);
+      await updateDoc(userRef, {
+        name: name,
+        username: username,
+        location: location,
+        bio: bio,
+        profileImage: finalImageUrl // Saves the ImgBB link directly to the database!
+      });
 
-      console.log("Profile Saved!", { name, username, location, bio, profileImage: finalImageUrl }); 
+      console.log("Profile Saved Successfully!"); 
       navigate('/profile');  
 
     } catch (error) {
       console.error("Error saving profile:", error);
       alert("Something went wrong while saving!");
     } finally {
-      setIsSaving(false); // Turns button back to "Save Changes"
+      setIsSaving(false); 
     }
   }; 
+
+  if (isLoading) {
+    return <div className="flex h-screen items-center justify-center bg-[#faf6e9] font-serif text-2xl">Loading Editor...</div>;
+  }
+
+  // Helper to generate initials if there is no image
+  const getInitials = (nameStr) => {
+    if (!nameStr) return "??";
+    const names = nameStr.split(' ');
+    if (names.length >= 2) return (names[0][0] + names[1][0]).toUpperCase();
+    return nameStr.substring(0, 2).toUpperCase();
+  };
 
   return ( 
     <div className="flex h-screen bg-[#faf6e9] font-serif overflow-hidden"> 
@@ -153,7 +194,7 @@ function EditProfilePage() {
                 {profileImage ? ( 
                   <img src={profileImage} alt="Profile Preview" className="w-full h-full object-cover" /> 
                 ) : ( 
-                  "HA"  
+                  getInitials(name)  
                 )} 
               </div> 
                 
