@@ -131,7 +131,7 @@ function SignupPage() {
         </h2>
 
         {/* --- ROW 1: TOP EMPTY SLOTS --- */}
-        <div className="absolute top-[42%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">
+        <div className="absolute top-[44%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">
           {topSlots.map((id) => (
             <div key={id} onClick={() => handleSlotClick(id)}
               className={`w-20 h-32 md:w-24 md:h-36 rounded-sm cursor-pointer transition-all duration-300 transform shadow-lg overflow-hidden border-2 origin-bottom flex flex-col items-center justify-center relative ${
@@ -159,7 +159,7 @@ function SignupPage() {
         </div>
 
         {/* --- ROW 2: BOTTOM EMPTY SLOTS --- */}
-        <div className="absolute top-[67%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">
+        <div className="absolute top-[69%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">
           {bottomSlots.map((id) => (
             <div key={id} onClick={() => handleSlotClick(id)}
               className={`w-20 h-32 md:w-24 md:h-36 rounded-sm cursor-pointer transition-all duration-300 transform shadow-lg overflow-hidden border-2 origin-bottom flex flex-col items-center justify-center relative ${
