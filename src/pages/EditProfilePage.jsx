@@ -2,10 +2,12 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 // --- FIREBASE IMPORTS ---
-import { auth, db, storage } from '../firebase'; // Ensure 'storage' is exported from your firebase config
+import { auth, db } from '../firebase'; 
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
-import { ref, uploadString, getDownloadURL } from 'firebase/storage';
+
+// --- VERCEL BLOB IMPORT ---
+import { put } from '@vercel/blob';
 
 function EditProfilePage() {
   const navigate = useNavigate();
@@ -19,7 +21,9 @@ function EditProfilePage() {
   const [username, setUsername] = useState('');
   const [location, setLocation] = useState('Kuala Lumpur');
   const [bio, setBio] = useState('');
-  const [profileImage, setProfileImage] = useState(null);
+  
+  const [profileImage, setProfileImage] = useState(null); // Local preview URL
+  const [selectedFile, setSelectedFile] = useState(null); // Raw file object for Vercel upload
 
   // --- FETCH EXISTING PROFILE DATA ---
   useEffect(() => {
@@ -35,10 +39,11 @@ function EditProfilePage() {
             if (data.username) setUsername(data.username);
             if (data.location) setLocation(data.location);
             if (data.bio) setBio(data.bio);
-            if (data.profileImageUrl) setProfileImage(data.profileImageUrl);
+            if (data.profileImage || data.profileImageUrl) {
+                // Check both in case your db uses one or the other
+                setProfileImage(data.profileImage || data.profileImageUrl);
+            }
           } else {
-            // Fallback if they registered but don't have a full profile doc yet
-            setName(user.displayName || 'Reader');
             setUsername(`@reader${user.uid.substring(0, 4)}`);
           }
         } catch (error) {
@@ -57,8 +62,8 @@ function EditProfilePage() {
   // --- Full Sidebar Navigation ---
   const handleNavigation = (item) => {
     if (item === 'Home') navigate('/home');
-    if (item === 'Add a New Book') navigate('/add-book');
-    if (item === 'Profile') navigate('/profile');
+    if (item === 'Add a New Book') navigate('/add-book'); 
+    if (item === 'Profile') navigate('/profile'); 
     if (item === 'Chat') navigate('/chat');
     if (item === 'Rating') navigate('/rating');
   };
@@ -70,16 +75,17 @@ function EditProfilePage() {
   const handleImageChange = (event) => {
     const file = event.target.files[0];
     if (file) {
+      setSelectedFile(file); // Save the raw file object for Vercel Blob
+
       const reader = new FileReader();
       reader.onloadend = () => {
-        // This sets a local base64 preview
-        setProfileImage(reader.result);
+        setProfileImage(reader.result); // Set a local base64 preview for the UI
       };
       reader.readAsDataURL(file);
     }
   };
 
-  // --- SAVE DATA TO FIREBASE ---
+  // --- SAVE DATA TO FIREBASE & VERCEL BLOB ---
   const handleSave = async (e) => {
     e.preventDefault();
     setIsSaving(true);
@@ -88,42 +94,37 @@ function EditProfilePage() {
       const user = auth.currentUser;
       if (!user) return;
 
-      let finalImageUrl = profileImage;
+      let finalImageUrl = profileImage; // Keep existing image by default
 
-      // If the profileImage string starts with 'data:', it means the user just uploaded a new local file.
-      // We need to upload this base64 string to Firebase Storage and get a permanent URL back.
-      if (profileImage && profileImage.startsWith('data:')) {
-        const imageRef = ref(storage, `profileImages/${user.uid}`);
-        await uploadString(imageRef, profileImage, 'data_url');
-        finalImageUrl = await getDownloadURL(imageRef);
+      // If a new file was selected, upload it to Vercel Blob
+      if (selectedFile) {
+        // NOTE: Ensure your Vercel Token is configured in your .env file as VITE_BLOB_READ_WRITE_TOKEN
+        const blob = await put(`profileImages/${user.uid}-${selectedFile.name}`, selectedFile, {
+          access: 'public',
+          token: import.meta.env.VITE_BLOB_READ_WRITE_TOKEN 
+        });
+        
+        finalImageUrl = blob.url; // Get the permanent URL from Vercel
       }
 
-      // Update the user's document in Firestore
+      // Update the user's document in Firestore with the Vercel URL
       const userRef = doc(db, 'users', user.uid);
       await setDoc(userRef, {
         name,
         username,
         location,
         bio,
-        profileImageUrl: finalImageUrl // Save the permanent Storage URL, not the local base64
-      }, { merge: true }); // merge: true prevents overwriting other data like their email or role
+        profileImage: finalImageUrl // Aligned with the field naming you might be using
+      }, { merge: true }); 
 
-      console.log("Profile successfully updated in Firebase!");
-      navigate('/profile');
+      console.log("Profile successfully updated!");
+      navigate('/profile'); // Successfully routes back to profile on save
     } catch (error) {
       console.error("Error saving profile:", error);
-      alert("Failed to save profile. Please try again.");
+      alert("Failed to save profile. Please check your console for errors.");
     } finally {
       setIsSaving(false);
     }
-  };
-
-  // Helper to generate initials if they don't have a picture
-  const getInitials = (displayName) => {
-    if (!displayName) return "HA";
-    const names = displayName.split(' ');
-    if (names.length >= 2) return (names[0][0] + names[1][0]).toUpperCase();
-    return displayName.substring(0, 2).toUpperCase();
   };
 
   if (isLoading) {
@@ -139,7 +140,7 @@ function EditProfilePage() {
           onClick={() => navigate('/home')}
           className="bg-[#faf6e9] rounded-2xl p-4 mb-10 w-4/5 shadow-sm flex justify-center cursor-pointer transition-transform hover:scale-105"
         >
-          <img src="logo.png" alt="The Book Parlor" className="w-full h-auto" />
+          <img src="../logo.png" alt="The Book Parlor" className="w-full h-auto" />
         </div>
 
         <nav className="flex flex-col w-full text-center space-y-2 mt-4">
@@ -179,11 +180,15 @@ function EditProfilePage() {
             {/* --- AVATAR UPLOAD SECTION --- */}
             <div className="flex items-center space-x-6 mb-8">
                 
-              <div className="w-24 h-24 rounded-full bg-[#f97316] text-white flex items-center justify-center font-sans font-bold text-3xl shadow-sm overflow-hidden uppercase">
+              {/* Profile Image Container - Adjusted to match standard layouts without the orange HA */}
+              <div className="w-28 h-28 rounded-full bg-gray-100 border-2 border-gray-200 text-gray-400 flex items-center justify-center shadow-sm overflow-hidden relative">
                 {profileImage ? (
                   <img src={profileImage} alt="Profile Preview" className="w-full h-full object-cover" />
                 ) : (
-                  getInitials(name) 
+                  // Neutral SVG icon if no image is present
+                  <svg className="w-14 h-14 text-gray-300" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M24 20.993V24H0v-2.996A14.977 14.977 0 0112.004 15c4.904 0 9.26 2.354 11.996 5.993zM16.002 8.999a4 4 0 11-8 0 4 4 0 018 0z" />
+                  </svg>
                 )}
               </div>
                 
@@ -213,7 +218,7 @@ function EditProfilePage() {
                   type="text" 
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  required
+                  placeholder="Your display name"
                   className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg font-sans focus:outline-none focus:border-[#5d782b] focus:ring-1 focus:ring-[#5d782b] transition-all"
                 />
               </div>

@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';   
 import { useNavigate } from 'react-router-dom';
 
 // --- FIREBASE IMPORTS ---
-import { auth, db } from '../firebase'; // Adjust path if necessary
-import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase'; 
+// Added deleteDoc to the imports
+import { collection, query, where, getDocs, doc, getDoc, deleteDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 
 function ProfilePage() {
@@ -17,7 +18,7 @@ function ProfilePage() {
     username: '@booklover',
     location: 'Unknown Location',
     rating: '--%',
-    profileImage: null // ADDED: New state to hold the picture link!
+    profileImage: null 
   });
   const [myBooks, setMyBooks] = useState([]);
 
@@ -33,14 +34,14 @@ function ProfilePage() {
           let fetchedName = "Reader";
           let fetchedUsername = `@reader${user.uid.substring(0, 4)}`;
           let fetchedLocation = "Update your location";
-          let fetchedProfileImage = null; // ADDED: Variable to store the fetched image
+          let fetchedProfileImage = null; 
 
           if (userDocSnap.exists()) {
             const data = userDocSnap.data();
             fetchedName = data.name || data.displayName || "Reader";
             fetchedUsername = data.username || `@${fetchedName.toLowerCase().replace(/\s/g, '')}`;
             fetchedLocation = data.location || "Location not set";
-            fetchedProfileImage = data.profileImage || null; // ADDED: Grab the ImgBB link from database!
+            fetchedProfileImage = data.profileImageUrl || data.profileImage || null;
           } else if (user.displayName) {
             fetchedName = user.displayName;
           } else if (user.email) {
@@ -52,7 +53,7 @@ function ProfilePage() {
             username: fetchedUsername,
             location: fetchedLocation,
             rating: '--%', 
-            profileImage: fetchedProfileImage // ADDED: Save it to our state!
+            profileImage: fetchedProfileImage 
           });
 
           // 2. Fetch User's Bookshelf
@@ -73,7 +74,6 @@ function ProfilePage() {
           setIsLoading(false);
         }
       } else {
-        // Redirect if not logged in
         navigate('/login');
       }
     });
@@ -87,8 +87,28 @@ function ProfilePage() {
     if (item === 'Add a New Book') navigate('/add-book');
     if (item === 'Chat') navigate('/chat');
     if (item === 'Rating') navigate('/rating');
-    if (item === 'Profile') {
-      // Already on Profile
+    if (item === 'Profile') {}
+  };
+
+  // --- BOOK ACTIONS (EDIT & DELETE) ---
+  const handleEditBook = (e, bookId) => {
+    e.stopPropagation(); // Prevents the card's main onClick from firing
+    navigate(`/edit-book/${bookId}`);
+  };
+
+  const handleDeleteBook = async (e, bookId) => {
+    e.stopPropagation(); // Prevents the card's main onClick from firing
+    
+    const confirmDelete = window.confirm("Are you sure you want to delete this book from your shelf?");
+    if (confirmDelete) {
+      try {
+        await deleteDoc(doc(db, 'books', bookId));
+        // Remove book from local state immediately for snappy UI
+        setMyBooks(prevBooks => prevBooks.filter(book => book.id !== bookId));
+      } catch (error) {
+        console.error("Error deleting book:", error);
+        alert("Failed to delete the book. Please try again.");
+      }
     }
   };
 
@@ -96,7 +116,6 @@ function ProfilePage() {
     return <div className="flex h-screen items-center justify-center bg-[#faf6e9] font-serif text-2xl">Loading Profile...</div>;
   }
 
-  // Generate initials for the avatar
   const getInitials = (name) => {
     const names = name.split(' ');
     if (names.length >= 2) return (names[0][0] + names[1][0]).toUpperCase();
@@ -140,7 +159,6 @@ function ProfilePage() {
           
           <div className="flex items-center space-x-6">
             
-            {/* --- UPDATED AVATAR DISPLAY --- */}
             <div className="w-28 h-28 rounded-full bg-[#f97316] text-white flex items-center justify-center font-sans font-bold text-4xl shadow-md border-4 border-[#faf6e9] uppercase overflow-hidden">
               {userProfile.profileImage ? (
                 <img src={userProfile.profileImage} alt={userProfile.name} className="w-full h-full object-cover" />
@@ -256,7 +274,24 @@ function ProfilePage() {
                         )}
                       </div>
                       <h3 className="font-bold text-gray-900 text-center leading-tight mb-1 text-sm w-full truncate px-2">{book.title}</h3>
-                      <p className="text-gray-500 text-xs text-center w-full truncate px-2">{book.author}</p>
+                      <p className="text-gray-500 text-xs text-center w-full truncate px-2 mb-2">{book.author}</p>
+
+                      {/* --- NEW ACTION BUTTONS (Visible on Hover) --- */}
+                      <div className="flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 mt-1">
+                        <button
+                          onClick={(e) => handleEditBook(e, book.id)}
+                          className="bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 text-[10px] font-sans font-bold py-1 px-3 rounded-full transition-colors"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteBook(e, book.id)}
+                          className="bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 text-[10px] font-sans font-bold py-1 px-3 rounded-full transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </div>
+
                     </div>
                   ))}
                 </div>

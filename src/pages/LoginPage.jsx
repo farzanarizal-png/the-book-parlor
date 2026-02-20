@@ -1,273 +1,171 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth'; // Added sendPasswordResetEmail
-import { collection, getDocs } from 'firebase/firestore';
-
-// CORRECTED: Moved up one folder level to find firebase.js in src/
 import { auth, db } from '../firebase'; 
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 
 function LoginPage() {
-  const [users, setUsers] = useState([]); 
+  const [recentUsers, setRecentUsers] = useState([]);
   const [selectedBook, setSelectedBook] = useState(null);
+  const [isManualLogin, setIsManualLogin] = useState(false);
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
-  const [resetMessage, setResetMessage] = useState(''); // Added state for password reset success
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFetchingBooks, setIsFetchingBooks] = useState(true); 
-  
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  // Fetch user profiles from Firestore when the component loads
+  // Load Recent Users from localStorage (will be empty after sign out)
   useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const usersCollection = collection(db, 'users');
-        const userSnapshot = await getDocs(usersCollection);
-        
-        const userList = userSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data() // Spreads fields like name, email, image
-        }));
-        
-        setUsers(userList);
-      } catch (err) {
-        console.error("Error fetching books:", err);
-      } finally {
-        setIsFetchingBooks(false);
-      }
-    };
-
-    fetchUsers();
+    const saved = JSON.parse(localStorage.getItem('bookParlorRecentUsers')) || [];
+    setRecentUsers(saved);
   }, []);
+
+  // Logic to fill the shelf with 6 slots
+  const displaySlots = [...recentUsers];
+  while (displaySlots.length < 6) {
+    displaySlots.push({ isEmpty: true, id: `empty-${displaySlots.length}` });
+  }
+  const topRow = displaySlots.slice(0, 3);
+  const bottomRow = displaySlots.slice(3, 6);
+
+  const handlePlusClick = () => {
+    setSelectedBook(null);
+    setIsManualLogin(true);
+    setEmail('');
+    setPassword('');
+  };
 
   const handleBookClick = (user) => {
     setSelectedBook(user);
+    setIsManualLogin(false);
     setPassword('');
-    setShowPassword(false);
-    setError(''); // Clear errors when switching books
-    setResetMessage(''); // Clear reset message when switching books
   };
 
-  // Handle the actual Firebase login
   const handleLogin = async () => {
-    if (!password) {
-      setError('Please enter a password.');
-      return;
-    }
+    const loginEmail = selectedBook ? selectedBook.email : email;
+    if (!loginEmail || !password) return alert("Please fill in credentials");
 
-    setIsLoading(true);
-    setError('');
-    setResetMessage('');
-
+    setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, selectedBook.email, password);
-      // Navigate to the protected home/dashboard page upon success
-      navigate('/home'); 
-    } catch (err) {
-      console.error("Login Error:", err);
-      if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
-        setError('Incorrect password or user not found.');
-      } else {
-        setError('Failed to log in. Please try again.');
+      await signInWithEmailAndPassword(auth, loginEmail, password);
+      
+      // Fetch user data from Firestore to save to the shelf for next time
+      const q = query(collection(db, "users"), where("email", "==", loginEmail));
+      const snap = await getDocs(q);
+      let userData = null;
+      snap.forEach((doc) => { userData = { id: doc.id, ...doc.data() }; });
+
+      if (userData) {
+        const currentSaved = JSON.parse(localStorage.getItem('bookParlorRecentUsers')) || [];
+        const filtered = currentSaved.filter(u => u.email !== userData.email);
+        const newList = [{
+          email: userData.email,
+          username: userData.name || userData.username,
+          profileImage: userData.profileImage || userData.profileImageUrl,
+          id: userData.id
+        }, ...filtered].slice(0, 6);
+        localStorage.setItem('bookParlorRecentUsers', JSON.stringify(newList));
       }
+
+      navigate('/home');
+    } catch (error) {
+      alert("Login failed. Please check your password.");
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  // Handle Forgot Password
-  const handleForgotPassword = async (e) => {
-    e.preventDefault(); // Prevents page jump
-
-    if (!selectedBook || !selectedBook.email) {
-      setError('Please select a book first.');
-      return;
+  const BookSlot = ({ item }) => {
+    if (item.isEmpty) {
+      return (
+        <div onClick={handlePlusClick} className="w-20 h-32 md:w-24 md:h-36 bg-white/20 border-2 border-dashed border-white/40 rounded-sm flex items-center justify-center cursor-pointer hover:bg-white/40 transition-all shadow-md origin-bottom">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-10 h-10 text-white">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+          </svg>
+        </div>
+      );
     }
-
-    setIsLoading(true);
-    setError('');
-    setResetMessage('');
-
-    try {
-      await sendPasswordResetEmail(auth, selectedBook.email);
-      setResetMessage(`A password reset link has been sent to ${selectedBook.email}.`);
-    } catch (err) {
-      console.error("Password Reset Error:", err);
-      setError('Failed to send reset email. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
+    return (
+      <div onClick={() => handleBookClick(item)} 
+           className={`w-20 h-32 md:w-24 md:h-36 bg-white rounded-sm cursor-pointer transition-all transform shadow-lg border-2 origin-bottom ${selectedBook?.email === item.email ? '-translate-y-4 border-[#9db490] ring-4 ring-[#9db490]/50' : 'border-transparent hover:-translate-y-2'}`}>
+        {item.profileImage ? (
+          <img src={item.profileImage} className="w-full h-full object-cover" alt="user" />
+        ) : (
+          <div className="w-full h-full bg-[#c5d1bb] flex items-center justify-center p-2">
+            <span className="text-[10px] font-bold text-[#333] uppercase text-center">{item.username}</span>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
     <div className="flex flex-col md:flex-row h-screen w-full bg-[#faf6e9] font-serif overflow-hidden">
-      
-      {/* =========================================
-          LEFT SIDE: Bookshelf Background & Books 
-          ========================================= */}
+      {/* Left side: The Shelf */}
       <div className="relative w-full md:w-1/2 h-full flex flex-col items-center bg-[#faf6e9]">
-        
-        {/* Bookshelf Background Image */}
-        <img 
-          src="../bookshelf.png" 
-          alt="3D Bookshelf Background" 
-          className="absolute inset-0 w-full h-full object-cover z-0 object-center" 
-        />
-
-        {/* Overlay Text */}
-        <h2 
-          className="absolute top-[20%] md:top-[22%] z-10 text-white text-4xl md:text-5xl italic drop-shadow-md text-center px-4"
-          style={{ fontFamily: "'Georgia', serif" }}
-        >
-          Pick Your Favourite Book
+        <img src="bookshelf.png" className="absolute inset-0 w-full h-full object-cover z-0 object-center" alt="shelf" />
+        {/* MATCHED: Shelf Heading Size & Font */}
+        <h2 className="absolute top-[20%] md:top-[22%] z-10 text-white text-4xl md:text-5xl italic drop-shadow-md text-center px-4" style={{ fontFamily: "'Georgia', serif" }}>
+          Pick Your Book
         </h2>
-
-        {/* --- TOP ROW --- 
-            ADJUSTMENT TIP: Change `top-[42%]` to nudge the whole row up or down to sit exactly on your background image's top shelf. */}
-        <div className="absolute top-[42%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end drop-shadow-2xl">
-          
-          {isFetchingBooks ? (
-            <div className="text-white bg-black/50 px-4 py-2 rounded-md z-10 font-sans">
-              Dusting the shelves...
-            </div>
-          ) : (
-            <>
-              {/* Render dynamically fetched users */}
-              {users.map((user) => (
-                <div
-                  key={user.id}
-                  onClick={() => handleBookClick(user)}
-                  className={`w-20 h-32 md:w-24 md:h-36 bg-white rounded-sm cursor-pointer transition-all duration-300 transform shadow-lg overflow-hidden border-2 origin-bottom ${
-                    selectedBook?.id === user.id 
-                      ? '-translate-y-4 border-[#9db490] ring-4 ring-[#9db490]/50 shadow-2xl scale-110' 
-                      : 'border-transparent hover:-translate-y-2 hover:shadow-xl'
-                  }`}
-                  title={user.name}
-                >
-                  <img 
-                    src={user.image || "../default_profile.png"} 
-                    alt={user.name} 
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      e.target.style.display = 'none';
-                      e.target.parentElement.classList.add('flex', 'items-center', 'justify-center', 'bg-[#c5d1bb]', 'text-xs', 'font-bold', 'text-center');
-                      e.target.parentElement.innerText = user.name || "Unknown";
-                    }}
-                  />
-                </div>
-              ))}
-
-              {/* Fill remaining slots to maintain layout on the top shelf */}
-              {Array.from({ length: Math.max(0, 3 - users.length) }).map((_, i) => (
-                <div key={`empty-top-${i}`} className="w-20 h-32 md:w-24 md:h-36 bg-[#f0f0f0] border-2 border-[#ccc] rounded-sm flex items-center justify-center opacity-80 cursor-not-allowed shadow-md">
-                  <span className="text-3xl text-gray-400">👤</span>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-
-        {/* --- BOTTOM ROW --- 
-            ADJUSTMENT TIP: Change `top-[67%]` to nudge the whole row up or down to sit exactly on your background image's bottom shelf. */}
-        <div className="absolute top-[70%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end drop-shadow-2xl">
-          {/* 3 Empty Slots on Bottom Shelf */}
-          {[4, 5, 6].map((i) => (
-            <div key={i} className="w-20 h-32 md:w-24 md:h-36 bg-[#f0f0f0] border-2 border-[#ccc] rounded-sm flex items-center justify-center opacity-80 cursor-not-allowed shadow-md">
-              <span className="text-3xl text-gray-400">👤</span>
-            </div>
-          ))}
-        </div>
+        <div className="absolute top-[42%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">{topRow.map((item, i) => <BookSlot key={item.id || i} item={item} />)}</div>
+        <div className="absolute top-[67%] z-10 flex gap-6 md:gap-8 justify-center w-full px-4 items-end">{bottomRow.map((item, i) => <BookSlot key={item.id || i} item={item} />)}</div>
       </div>
 
-      {/* =========================================
-          RIGHT SIDE: Login Form Area 
-          ========================================= */}
+      {/* Right side: Login Form */}
+      {/* MATCHED: Padding and Shadow */}
       <div className="w-full md:w-1/2 h-full bg-[#a1af96] flex flex-col items-center justify-between py-12 px-6 md:px-12 text-white relative z-20 shadow-[-10px_0_20px_rgba(0,0,0,0.1)]">
         
-        {/* Top: Logo */}
+        {/* MATCHED: Logo Size */}
         <div className="mt-8 flex flex-col items-center w-full">
-          <img src="../logo.png" className="w-64 md:w-80 drop-shadow-md" alt="The Book Parlor" />
+          <img src="logo.png" className="w-64 md:w-80 drop-shadow-md" alt="Logo" />
         </div>
 
-        {/* Middle: Login Section */}
         <div className="flex flex-col items-center justify-center w-full max-w-[320px] mt-20px">
-          <h1 className="text-5xl md:text-6xl font-bold mb-8 tracking-wide drop-shadow-sm" style={{ fontFamily: "'Lora', serif" }}>
+          {/* MATCHED: H1 Text Size & Font */}
+          <h1 className="text-5xl md:text-6xl font-bold mb-6 tracking-wide drop-shadow-sm" style={{ fontFamily: "'Lora', serif" }}>
             Login
           </h1>
-
-          <div className="w-full min-h-180px flex flex-col items-center transition-all duration-300">
-            {selectedBook ? (
+          
+          {/* MATCHED: Min-height wrapper */}
+          <div className="w-full min-h-250px flex flex-col items-center transition-all duration-300">
+            {selectedBook || isManualLogin ? (
               <div className="flex flex-col items-center w-full animate-in fade-in zoom-in duration-300">
+                {!selectedBook && (
+                  // MATCHED: Input text size (text-lg) and layout
+                  <input type="email" placeholder="Email Address" className="w-full px-6 py-3 mb-3 rounded-full bg-white/20 text-white placeholder-white/70 border border-transparent focus:outline-none focus:border-white focus:bg-white/30 text-center text-lg transition-all shadow-inner" value={email} onChange={(e) => setEmail(e.target.value)} />
+                )}
                 
-                {/* --- Neatly Aligned Password Box --- */}
-                <div className="w-full flex items-center bg-white/20 border-2 border-transparent focus-within:border-white focus-within:bg-white/30 rounded-full mb-4 overflow-hidden transition-all shadow-inner">
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    placeholder={`Password for ${selectedBook.name}`}
-                    className="flex-1 py-3 pl-6 pr-2 bg-transparent text-white placeholder-white/70 focus:outline-none text-left text-lg font-sans"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleLogin()} 
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="mr-2 px-4 py-1.5 text-sm font-bold text-white bg-[#5d782b]/70 hover:bg-[#5d782b] rounded-full transition-colors shadow-sm font-sans"
-                  >
+                {selectedBook && <p className="mb-4 text-center italic text-lg text-white/90">Logging in as: <b>{selectedBook.username}</b></p>}
+                
+                {/* MATCHED: Password wrapper and text size (text-lg) */}
+                <div className="w-full flex items-center bg-white/20 border-2 border-transparent focus-within:border-white focus-within:bg-white/30 rounded-full mb-6 overflow-hidden transition-all shadow-inner">
+                  <input type={showPassword ? "text" : "password"} placeholder="Password" className="flex-1 py-3 pl-6 pr-2 bg-transparent text-white placeholder-white/70 focus:outline-none text-left text-lg" value={password} onChange={(e) => setPassword(e.target.value)} />
+                  <button onClick={() => setShowPassword(!showPassword)} className="mr-2 px-4 py-1.5 text-sm font-bold text-white bg-[#5d782b]/70 hover:bg-[#5d782b] rounded-full transition-colors shadow-sm">
                     {showPassword ? "Hide" : "Show"}
                   </button>
                 </div>
-
-                {/* --- Error Message Display --- */}
-                {error && (
-                  <div className="w-full mb-4 text-red-200 text-sm font-semibold text-center bg-red-900/40 py-2 rounded-lg font-sans px-2">
-                    {error}
-                  </div>
-                )}
-
-                {/* --- Success Message Display --- */}
-                {resetMessage && (
-                  <div className="w-full mb-4 text-green-200 text-sm font-semibold text-center bg-green-900/40 py-2 rounded-lg font-sans px-2">
-                    {resetMessage}
-                  </div>
-                )}
                 
-                {/* Login Button */}
-                <button 
-                  onClick={handleLogin}
-                  disabled={isLoading}
-                  className={`w-full py-3 mb-3 bg-[#5d782b] hover:bg-[#222] text-white rounded-full text-lg font-semibold shadow-md transition-colors font-sans ${isLoading ? 'opacity-70 cursor-wait' : ''}`}
-                >
-                  {isLoading ? 'Processing...' : 'Login'}
+                {/* MATCHED: Button text size (text-lg font-semibold) */}
+                <button onClick={handleLogin} disabled={loading} className="w-full py-3 bg-[#5d782b] hover:bg-[#4a6023] rounded-full text-lg font-semibold shadow-md transition-colors disabled:opacity-70">
+                  {loading ? "Logging in..." : "Login"}
                 </button>
-
-                {/* Forgot Password Link */}
-                <a 
-                  href="#" 
-                  onClick={handleForgotPassword}
-                  className="text-sm underline opacity-80 hover:opacity-100 hover:text-white transition-opacity font-sans"
-                >
-                  Forgot password?
-                </a>
               </div>
             ) : (
-              <p className="text-white/80 italic text-lg mt-8 text-center px-4 leading-relaxed">
-                Please pick your book from the shelf to log in.
+              // MATCHED: Placeholder text size (text-lg)
+              <p className="text-white/80 italic text-lg mt-12 text-center px-4 leading-relaxed">
+                Choose a book from the shelf to login.
               </p>
             )}
           </div>
         </div>
 
-        {/* Bottom: Sign Up Section */}
+        {/* MATCHED: Bottom text sizing and fonts */}
         <div className="mb-6 flex flex-col items-center w-full max-w-[320px]">
           <p className="text-xl md:text-2xl mb-4 text-white drop-shadow-sm" style={{ fontFamily: "'Lora', serif" }}>
             New here? Join the Parlor
           </p>
-          <button 
-            onClick={() => navigate('/signup')}
-            className="w-full py-3 bg-[#5d782b] hover:bg-[#4a6023] text-white rounded-full text-lg font-semibold shadow-md transition-colors transform hover:scale-[1.02] font-sans"
-          >
+          <button onClick={() => navigate('/signup')} className="w-full py-3 border-2 border-white rounded-full hover:bg-white hover:text-[#a1af96] text-lg font-semibold shadow-md transition-all transform hover:scale-[1.02]">
             Sign Up
           </button>
         </div>

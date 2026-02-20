@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { auth, db } from '../firebase'; // Ensure these are exported from your firebase.js
+import { auth, db } from '../firebase'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { 
   collection, 
@@ -28,10 +28,10 @@ function RatingPage() {
   const [activeTab, setActiveTab] = useState('pending'); // 'pending' or 'received'
   const [currentUser, setCurrentUser] = useState(null);
   
-  // Interactive Star States
-  const [hoveredStar, setHoveredStar] = useState(0); // Optional: use this if you build interactive stars
+  // Interactive Star States (Updated to handle multiple pending reviews smoothly)
+  const [hoveredStars, setHoveredStars] = useState({}); 
   const [selectedStars, setSelectedStars] = useState({}); 
-  const [reviewTexts, setReviewTexts] = useState({});     
+  const [reviewTexts, setReviewTexts] = useState({});      
 
   // --- FIREBASE DATA STATES ---
   const [pendingRatings, setPendingRatings] = useState([]); 
@@ -89,6 +89,10 @@ function RatingPage() {
   }, [currentUser]);
 
   // --- HANDLERS ---
+  const handleStarHover = (swapId, starValue) => {
+    setHoveredStars(prev => ({ ...prev, [swapId]: starValue }));
+  };
+
   const handleStarClick = (swapId, starValue) => {
     setSelectedStars(prev => ({ ...prev, [swapId]: starValue }));
   };
@@ -108,7 +112,6 @@ function RatingPage() {
     }
 
     try {
-      // Update the existing pending rating document to 'completed'
       const ratingRef = doc(db, "ratings", swapId);
       await updateDoc(ratingRef, {
         rating: rating,
@@ -119,9 +122,6 @@ function RatingPage() {
 
       alert(`Thank you! Your ${rating}-star review for ${partnerName} has been submitted.`);
       
-      // Note: No need to manually filter pendingRatings out of state anymore!
-      // The onSnapshot listener above will automatically remove it because its status changed.
-
     } catch (error) {
       console.error("Error submitting review:", error);
       alert("Something went wrong saving your review.");
@@ -225,9 +225,53 @@ function RatingPage() {
                 </div>
               ) : (
                 pendingRatings.map((swap) => (
-                  /* Existing pending rating card logic */
-                  <div key={swap.id}>
-                    {/* Your interactive star UI will go inside here, utilizing handleStarClick, handleTextChange, and handleSubmitReview(swap.id, swap.partnerName) */}
+                  <div key={swap.id} className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm transition-all hover:shadow-md">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+                      <div>
+                        <h3 className="text-xl font-bold text-gray-800">
+                          Rate your swap with <span className="text-[#5d782b] italic">{swap.partnerName || "your partner"}</span>
+                        </h3>
+                        {swap.bookTitle && (
+                          <p className="text-sm text-gray-500 font-sans mt-1">Book Traded: "{swap.bookTitle}"</p>
+                        )}
+                      </div>
+                      
+                      {/* Interactive Stars Component */}
+                      <div className="flex gap-1" onMouseLeave={() => handleStarHover(swap.id, 0)}>
+                        {[1, 2, 3, 4, 5].map((star) => {
+                          const currentVal = hoveredStars[swap.id] || selectedStars[swap.id] || 0;
+                          return (
+                            <svg 
+                              key={star} 
+                              onMouseEnter={() => handleStarHover(swap.id, star)}
+                              onClick={() => handleStarClick(swap.id, star)}
+                              className={`w-8 h-8 cursor-pointer transition-colors ${star <= currentVal ? 'text-yellow-400 fill-current' : 'text-gray-300 fill-current'}`} 
+                              viewBox="0 0 20 20"
+                            >
+                              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                            </svg>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Text Area */}
+                    <textarea 
+                      value={reviewTexts[swap.id] || ""}
+                      onChange={(e) => handleTextChange(swap.id, e.target.value)}
+                      placeholder="Leave a short review about your experience... (optional)"
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl p-4 font-sans text-sm focus:ring-2 focus:ring-[#5d782b] focus:border-transparent outline-none resize-none h-24 mb-4"
+                    />
+
+                    {/* Submit Button */}
+                    <div className="flex justify-end">
+                      <button 
+                        onClick={() => handleSubmitReview(swap.id, swap.partnerName || "your partner")}
+                        className="bg-[#5d782b] text-white px-6 py-2.5 rounded-lg font-bold uppercase tracking-widest text-[10px] hover:bg-[#4a6023] transition-colors shadow-sm"
+                      >
+                        Submit Review
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -240,7 +284,6 @@ function RatingPage() {
               
               {/* Overall Rating Banner */}
               <div className="bg-[#a3b19b] p-6 rounded-2xl shadow-inner mb-6 text-center text-white flex flex-col items-center">
-                 {/* Replaced hardcoded zeros with actual calculated data */}
                  <h2 className="text-3xl font-bold mb-1">Your Rating: {averageRating} / 5</h2>
                  <div className="flex space-x-1 mt-1">
                     {[1, 2, 3, 4, 5].map((star) => (
@@ -272,7 +315,6 @@ function RatingPage() {
                       <div className="flex justify-between items-start mb-2">
                         <h4 className="font-bold text-gray-800">{review.partnerName || "A Reader"}</h4>
                         <div className="flex text-yellow-400">
-                           {/* Quick loop to show stars */}
                            {[...Array(5)].map((_, i) => (
                              <svg key={i} className={`w-4 h-4 ${i < review.rating ? 'fill-current' : 'text-gray-200 fill-current'}`} viewBox="0 0 20 20">
                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
@@ -280,7 +322,9 @@ function RatingPage() {
                            ))}
                         </div>
                       </div>
-                      <p className="text-sm text-gray-600 font-sans italic">"{review.reviewText}"</p>
+                      <p className="text-sm text-gray-600 font-sans italic">
+                        {review.reviewText ? `"${review.reviewText}"` : "Rated without a written review."}
+                      </p>
                     </div>
                   ))}
                 </div>

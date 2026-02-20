@@ -8,7 +8,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 
 function BookDetailsPage() {
   const navigate = useNavigate();
-  const { id } = useParams(); // Gets the book ID from the URL (e.g., /book/123)
+  const { id } = useParams(); 
   
   // --- STATES ---
   const [isLoading, setIsLoading] = useState(true);
@@ -30,21 +30,55 @@ function BookDetailsPage() {
         const bookSnap = await getDoc(bookRef);
         
         if (bookSnap.exists()) {
-          setBookData({ id: bookSnap.id, ...bookSnap.data() });
+          let fetchedBook = { id: bookSnap.id, ...bookSnap.data() };
+
+          // ROBUST FALLBACKS based on your database structure
+          fetchedBook.displayImage = fetchedBook.coverUrl || fetchedBook.imageUrl || null;
+          fetchedBook.displayLocation = fetchedBook.location || fetchedBook.city || 'Unknown';
+          fetchedBook.displayDescription = fetchedBook.description || fetchedBook.synopsis || 'No description provided.';
+
+          // --- FETCH OWNER NAME FROM USERS COLLECTION ---
+          if (fetchedBook.ownerId) {
+            try {
+              const userRef = doc(db, 'users', fetchedBook.ownerId);
+              const userSnap = await getDoc(userRef);
+              
+              if (userSnap.exists()) {
+                const userData = userSnap.data();
+                fetchedBook.ownerName = userData.name || userData.username || userData.displayName || "Unknown User";
+                fetchedBook.ownerRating = userData.rating || "New";
+              } else {
+                fetchedBook.ownerName = "Unknown User";
+                fetchedBook.ownerRating = "New";
+              }
+            } catch (err) {
+              console.error("Error fetching the owner's profile:", err);
+              fetchedBook.ownerName = "Unknown User";
+            }
+          }
+
+          setBookData(fetchedBook);
         } else {
           console.log("No such book!");
           setBookData(null);
         }
 
-        // 2. If logged in, fetch the user's available books for the swap modal
+        // 2. Fetch the user's available books for the swap modal
         if (user) {
           const q = query(
             collection(db, 'books'), 
             where("ownerId", "==", user.uid),
-            where("status", "==", "Available") // Only allow them to swap available books
+            where("status", "in", ["AVAILABLE", "Available", "available"]) // Handle case differences
           );
           const myBooksSnap = await getDocs(q);
-          const myBooks = myBooksSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+          const myBooks = myBooksSnap.docs.map(d => {
+            const data = d.data();
+            return {
+              id: d.id,
+              ...data,
+              displayImage: data.coverUrl || data.imageUrl || null
+            };
+          });
           setMyBookshelf(myBooks);
         }
 
@@ -73,7 +107,6 @@ function BookDetailsPage() {
       navigate('/login');
       return;
     }
-    // Prevent user from swapping with themselves
     if (bookData.ownerId === auth.currentUser.uid) {
       alert("You cannot swap a book with yourself!");
       return;
@@ -81,6 +114,7 @@ function BookDetailsPage() {
     setIsModalOpen(true);
   };
 
+  // --- UPDATED SUBMIT LOGIC ---
   const confirmSwap = async () => {
     if (!selectedBookToOffer) {
       alert("Please select a book to offer first.");
@@ -89,7 +123,7 @@ function BookDetailsPage() {
 
     setIsSubmitting(true);
     try {
-      // Create a swap request document in Firebase
+      // 1. Save the swap request to your database
       await addDoc(collection(db, 'swapRequests'), {
         requestedBookId: bookData.id,
         requestedBookTitle: bookData.title,
@@ -101,22 +135,34 @@ function BookDetailsPage() {
         createdAt: serverTimestamp()
       });
 
+      // 2. Show the green success screen
       setSwapSuccess(true);
+      
+      // 3. After 2 seconds, redirect to Chat AND pass the correct data!
       setTimeout(() => {
         setIsModalOpen(false);
         setSwapSuccess(false);
-        setSelectedBookToOffer(null);
-      }, 3000); 
+        
+        // --- THIS IS THE CRITICAL CHANGE ---
+        // Navigate to the chat page, carrying the EXACT data ChatPage expects
+        navigate('/chat', { 
+          state: { 
+            ownerId: bookData.ownerId,
+            ownerName: bookData.ownerName,
+            bookTitle: bookData.title,
+            myOfferedBook: selectedBookToOffer.title
+          } 
+        });
+
+      }, 2000);
 
     } catch (error) {
       console.error("Error submitting swap request:", error);
       alert("Something went wrong. Please try again.");
-    } finally {
-      setIsSubmitting(false);
-    }
+      setIsSubmitting(false); 
+    } 
   };
 
-  // Helper to get initials
   const getInitials = (name) => {
     if (!name) return "??";
     const names = name.split(' ');
@@ -137,6 +183,9 @@ function BookDetailsPage() {
       </div>
     );
   }
+
+  const currentStatus = bookData.status ? bookData.status.toUpperCase() : 'AVAILABLE';
+  const isAvailable = currentStatus === 'AVAILABLE';
 
   return (
     <div className="flex h-screen bg-[#faf6e9] font-serif overflow-hidden">
@@ -166,7 +215,7 @@ function BookDetailsPage() {
       {/* --- MAIN CONTENT AREA --- */}
       <div className="flex-1 overflow-y-auto relative h-full">
         
-        {/* Back Button & Header */}
+        {/* Back Button Header */}
         <div className="px-10 pt-10 pb-6 bg-[#dde5eb] shadow-sm flex items-center">
           <button 
             onClick={() => navigate(-1)} 
@@ -183,25 +232,25 @@ function BookDetailsPage() {
         <div className="px-10 md:px-20 py-12 max-w-6xl mx-auto">
           <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden flex flex-col md:flex-row">
             
-            {/* Left Column: Book Cover with Status Badge */}
+            {/* Left Column: Cover */}
             <div className="md:w-1/3 bg-[#cad3c3] p-10 flex items-center justify-center min-h-400px relative">
-              {/* STATUS BADGE */}
+              
               <div className={`absolute top-6 right-6 px-4 py-1.5 rounded-full font-sans font-bold text-[10px] uppercase tracking-widest shadow-md ${
-                bookData.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'
+                isAvailable ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'
               }`}>
-                {bookData.status || 'Available'}
+                {currentStatus}
               </div>
 
               <div className="w-48 h-72 bg-white rounded-md shadow-2xl flex items-center justify-center border border-gray-200 text-center relative overflow-hidden">
-                {bookData.coverUrl ? (
-                   <img src={bookData.coverUrl} alt={bookData.title} className="w-full h-full object-cover absolute inset-0" />
+                {bookData.displayImage ? (
+                   <img src={bookData.displayImage} alt={bookData.title} className="w-full h-full object-cover absolute inset-0" />
                 ) : (
                    <span className="text-gray-500 font-bold text-xl px-4 z-10">{bookData.title}</span>
                 )}
               </div>
             </div>
 
-            {/* Right Column: Book Info */}
+            {/* Right Column: Info */}
             <div className="md:w-2/3 p-10 flex flex-col justify-between">
               <div>
                 <div className="flex justify-between items-start mb-2">
@@ -214,7 +263,7 @@ function BookDetailsPage() {
                 
                 <div className="flex space-x-4 mb-6 font-sans text-sm">
                   <span className="bg-[#f0f4eb] text-[#4a6023] py-1.5 px-4 rounded-lg font-semibold flex items-center">
-                    📍 {bookData.location || 'Unknown'}
+                    📍 {bookData.displayLocation}
                   </span>
                   <span className="bg-blue-50 text-blue-700 py-1.5 px-4 rounded-lg font-semibold flex items-center">
                     📚 {bookData.genre || 'Fiction'}
@@ -224,11 +273,10 @@ function BookDetailsPage() {
                 <div className="mb-8">
                   <h3 className="text-lg font-bold text-gray-800 mb-2">Synopsis</h3>
                   <p className="text-gray-600 font-sans leading-relaxed whitespace-pre-line">
-                    {bookData.description || 'No description provided by the owner.'}
+                    {bookData.displayDescription}
                   </p>
                 </div>
 
-                {/* OWNER DETAILS & RATING */}
                 <div className="flex items-center space-x-3 bg-gray-50 p-4 rounded-xl border border-gray-100 w-max mb-8">
                   <div className="w-10 h-10 rounded-full bg-blue-200 text-blue-700 flex items-center justify-center font-sans font-bold shadow-inner">
                     {getInitials(bookData.ownerName)}
@@ -236,9 +284,8 @@ function BookDetailsPage() {
                   <div>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest leading-none mb-1">Owned By</p>
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-bold text-gray-800 font-sans">{bookData.ownerName || 'Unknown Reader'}</p>
+                      <p className="text-sm font-bold text-gray-800 font-sans">{bookData.ownerName}</p>
                       
-                      {/* STAR RATING COMPONENT */}
                       <div className="flex items-center bg-[#5d782b]/10 px-1.5 py-0.5 rounded-md">
                         <svg className="w-3 h-3 text-yellow-500 fill-current" viewBox="0 0 20 20">
                           <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
@@ -250,17 +297,17 @@ function BookDetailsPage() {
                 </div>
               </div>
 
-              {/* ACTION BUTTON (Respects Status) */}
+              {/* ACTION BUTTON */}
               <button 
                 onClick={handleRequestSwap}
-                disabled={bookData.status !== 'Available'}
+                disabled={!isAvailable}
                 className={`w-full py-4 rounded-xl font-sans font-bold text-lg transition-transform shadow-md ${
-                  bookData.status === 'Available' 
+                  isAvailable 
                   ? 'bg-[#5a7034] hover:bg-[#465728] text-white transform hover:scale-[1.02]' 
                   : 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-70'
                 }`}
               >
-                {bookData.status === 'Available' ? 'Request to Swap' : 'Currently Reserved'}
+                {isAvailable ? 'Request to Swap' : 'Currently Reserved'}
               </button>
             </div>
           </div>
@@ -326,8 +373,8 @@ function BookDetailsPage() {
                         }`}
                       >
                          <div className="w-16 h-24 bg-gray-200 rounded shadow-sm mb-2 overflow-hidden flex items-center justify-center">
-                           {book.coverUrl ? (
-                             <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover" />
+                           {book.displayImage ? (
+                             <img src={book.displayImage} alt={book.title} className="w-full h-full object-cover" />
                            ) : (
                              <span className="text-[8px] font-sans font-bold text-gray-500 px-1">{book.title}</span>
                            )}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { auth, db } from '../firebase'; // Ensure auth is imported
+import { auth, db } from '../firebase'; 
 import { onAuthStateChanged } from 'firebase/auth';
 import { 
   collection, 
@@ -8,222 +8,318 @@ import {
   orderBy, 
   onSnapshot, 
   addDoc, 
-  serverTimestamp 
+  serverTimestamp,
+  doc,
+  setDoc,
+  where,
+  updateDoc 
 } from 'firebase/firestore';
+import { put } from '@vercel/blob';
+
+// --- HELPER FUNCTIONS ---
+const formatMeetupDateTime = (dateStr, timeStr) => {
+  if (!dateStr || !timeStr) return '';
+  const d = new Date(`${dateStr}T${timeStr}`);
+  return d.toLocaleDateString('en-US', { 
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' 
+  }) + ' at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+};
 
 function ChatPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const scrollRef = useRef();
+  const fileInputRef = useRef(null);
+  const notifiedMeetupsRef = useRef(new Set());
 
-  // 1. DATA FROM NAVIGATION STATE (Passed from BookDetailsPage or Inbox)
+  // Navigation State
   const ownerName = location.state?.ownerName;
-  const ownerId = location.state?.ownerId;             // Highly recommended to pass this!
-  const bookTitle = location.state?.bookTitle;         // Their book
-  const myOfferedBook = location.state?.myOfferedBook; // Your book
+  const passedOwnerId = location.state?.ownerId;             
+  const passedChatId = location.state?.chatId;
+  const safeOwnerId = passedOwnerId || ownerName || "unknown_reader";
+  const isDirectChat = Boolean(ownerName) || Boolean(passedChatId);
   
-  // If ownerName exists, we are in a 1-on-1 chat. Otherwise, we show the Inbox.
-  const isDirectChat = Boolean(ownerName);
-  
-  // 2. COMPONENT STATES
+  // Component States
   const [currentUser, setCurrentUser] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [inboxChats, setInboxChats] = useState([]); 
   const [inputText, setInputText] = useState("");
   const [showMeetupModal, setShowMeetupModal] = useState(false);
   const [meetupDetails, setMeetupDetails] = useState({ date: '', time: '', location: '' });
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
 
-  // Handle Authentication State
+  const chatId = passedChatId || (currentUser?.uid && safeOwnerId ? [currentUser.uid, safeOwnerId].sort().join('_') : null);
+
+  // --- 1. REAL-TIME CLOCK & NOTIFICATIONS ---
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setCurrentUser(user);
-    });
+    const timer = setInterval(() => setCurrentTime(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => setCurrentUser(user));
     return () => unsubscribe();
   }, []);
 
-  // Create a more robust unique Room ID (Prevents everyone chatting with "Sarah" from sharing the same room)
-  // It uses the passed chatId, OR combines the two user IDs, OR falls back to the old ownerName logic.
-  const chatId = location.state?.chatId 
-    ? location.state.chatId 
-    : (currentUser?.uid && ownerId) 
-      ? [currentUser.uid, ownerId].sort().join('_') 
-      : ownerName ? `chat_${ownerName.replace(/\s+/g, '_')}` : null;
+  const activeMeetups = messages.filter(m => m.type === 'meetup' && m.meetupData?.status === 'accepted');
 
-  // 3. REAL-TIME FIREBASE LISTENER
+  useEffect(() => {
+    activeMeetups.forEach((msg) => {
+      const meetupDateObj = new Date(`${msg.meetupData.date}T${msg.meetupData.time}`);
+      const minutesLeft = Math.floor((meetupDateObj - currentTime) / 60000);
+
+      if ([60, 30, 5].includes(minutesLeft)) {
+        const notificationId = `${msg.id}-${minutesLeft}`;
+        if (!notifiedMeetupsRef.current.has(notificationId)) {
+          notifiedMeetupsRef.current.add(notificationId);
+          const body = `Your swap at ${msg.meetupData.location} is in ${minutesLeft} minutes!`;
+          if ("Notification" in window && Notification.permission === "granted") {
+            new Notification("Meetup Reminder", { body });
+          } else {
+            alert(body);
+          }
+        }
+      }
+    });
+  }, [currentTime, activeMeetups]);
+
+  // --- 2. FIREBASE LISTENERS ---
+  useEffect(() => {
+    if (!isDirectChat && currentUser) {
+      const q = query(collection(db, "chats"), where("participants", "array-contains", currentUser.uid));
+      return onSnapshot(q, (snapshot) => {
+        const fetched = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        fetched.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
+        setInboxChats(fetched);
+      });
+    }
+  }, [isDirectChat, currentUser]);
+
   useEffect(() => {
     if (!isDirectChat || !chatId || !currentUser) return;
-
-    const q = query(
-      collection(db, "chats", chatId, "messages"),
-      orderBy("createdAt", "asc")
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetched = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setMessages(fetched);
+    const q = query(collection(db, "chats", chatId, "messages"), orderBy("createdAt", "asc"));
+    return onSnapshot(q, (snapshot) => {
+      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      scrollRef.current?.scrollIntoView({ behavior: "smooth" });
     });
-
-    return () => unsubscribe(); // Cleanup listener when leaving page
   }, [chatId, isDirectChat, currentUser]);
 
-  // 4. AUTO-SCROLL TO NEWEST MESSAGE
-  useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  // --- 3. HANDLERS ---
+  const updateChatMetadata = async (lastMessageText) => {
+    if (!currentUser || !chatId) return;
+    try {
+      await setDoc(doc(db, "chats", chatId), {
+        participants: [currentUser.uid, safeOwnerId], 
+        lastMessage: lastMessageText,
+        updatedAt: serverTimestamp(),
+        [`name_${safeOwnerId}`]: ownerName || "Fellow Reader",
+        [`name_${currentUser.uid}`]: currentUser.displayName || currentUser.email?.split('@')[0] || "Someone"
+      }, { merge: true });
+    } catch (error) {}
+  };
 
-  // 5. SEND STANDARD TEXT MESSAGE
+  const handleImageUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file || !currentUser || !chatId) return;
+    setIsUploadingImage(true);
+    try {
+      const blob = await put(`chat/${Date.now()}_${file.name}`, file, {
+        access: 'public',
+        token: "vercel_blob_rw_KEK87zzaDBf6xeR8_SxQV9ZGQMDc4ZYLdnOoXV8ISJAqS68" 
+      });
+      await addDoc(collection(db, "chats", chatId, "messages"), {
+        senderId: currentUser.uid,
+        imageUrl: blob.url,
+        type: 'image',
+        createdAt: serverTimestamp(),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      });
+      await updateChatMetadata("Sent an image");
+    } catch (error) {
+      alert("Upload failed.");
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
   const handleSendMessage = async (e) => {
     if (e) e.preventDefault();
     if (!inputText.trim() || !currentUser) return;
-
+    const text = inputText; setInputText("");
     await addDoc(collection(db, "chats", chatId, "messages"), {
-      senderId: currentUser.uid, // Replaced hardcoded 'me' with actual User ID
-      text: inputText,
-      createdAt: serverTimestamp(),
+      senderId: currentUser.uid, text, type: 'text',
+      createdAt: serverTimestamp(), time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    });
+    await updateChatMetadata(text);
+  };
+
+  const handleAcceptMeetup = async (id) => {
+    await updateDoc(doc(db, "chats", chatId, "messages", id), { "meetupData.status": "accepted" });
+    await updateChatMetadata("✅ Meetup Accepted!");
+  };
+
+  const handleCompleteMeetup = async (id) => {
+    // Mark as completed in DB
+    await updateDoc(doc(db, "chats", chatId, "messages", id), { "meetupData.status": "completed" });
+    await updateChatMetadata("🤝 Swap Completed!");
+    
+    // REDIRECT TO RATING PAGE
+    navigate('/rating', { 
+      state: { 
+        partnerId: safeOwnerId, 
+        partnerName: ownerName || "Fellow Reader" 
+      } 
+    });
+  };
+
+  const handleConfirmMeeting = async () => {
+    await addDoc(collection(db, "chats", chatId, "messages"), {
+      senderId: currentUser.uid, 
+      type: 'meetup',
+      text: `PROPOSED MEETUP\nLocation: ${meetupDetails.location}\nDate: ${meetupDetails.date}\nTime: ${meetupDetails.time}`,
+      meetupData: { ...meetupDetails, status: 'pending' },
+      createdAt: serverTimestamp(), 
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     });
-    setInputText("");
-  };
-
-  // 6. SEND MEETUP PROPOSAL
-  const handleConfirmMeeting = async () => {
-    if (!meetupDetails.date || !meetupDetails.location) {
-      alert("Please fill in the meeting date and location.");
-      return;
-    }
-    if (!currentUser) return;
-
-    const proposalText = `📅 PROPOSED MEETUP\nDate: ${meetupDetails.date}\nTime: ${meetupDetails.time}\nLocation: ${meetupDetails.location}`;
-    
-    await addDoc(collection(db, "chats", chatId, "messages"), {
-      senderId: currentUser.uid, // Replaced hardcoded 'me'
-      text: proposalText,
-      createdAt: serverTimestamp(),
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      type: 'meetup' 
-    });
-    
+    await updateChatMetadata("📅 Proposed a meetup");
     setShowMeetupModal(false);
-    setMeetupDetails({ date: '', time: '', location: '' });
   };
 
-  // ==========================================
-  // SCENARIO A: EMPTY INBOX (Accessed via Sidebar)
-  // ==========================================
+  // --- 4. RENDER INBOX VIEW ---
   if (!isDirectChat) {
     return (
       <div className="min-h-screen bg-[#faf6e9] flex flex-col font-serif">
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-white shadow-sm">
-          <h1 className="text-2xl font-bold text-gray-800">Messages</h1>
+         <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-white shadow-sm shrink-0">
+          <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Messages</h1>
           <button onClick={() => navigate('/home')} className="text-[#5d782b] font-bold text-sm uppercase tracking-widest">Back</button>
         </div>
-        <div className="flex-1 flex flex-col items-center justify-center text-gray-400 p-10 text-center">
-          <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mb-4 text-3xl">💬</div>
-          <h3 className="text-xl font-bold text-gray-600">No Messages Yet</h3>
-          <p className="mt-2 font-sans text-sm max-w-xs">Visit the library and request a swap to start a conversation with other readers.</p>
+        <div className="flex-1 overflow-y-auto p-4 md:p-8">
+          <div className="max-w-3xl mx-auto space-y-3">
+            {inboxChats.map(chat => {
+              const otherId = chat.participants?.find(id => id !== currentUser?.uid);
+              const otherName = chat[`name_${otherId}`] || "Fellow Reader";
+              return (
+                <div key={chat.id} onClick={() => navigate('/chat', { state: { ownerId: otherId, ownerName: otherName, chatId: chat.id } })} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer flex items-center justify-between transition-all">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-[#cddce6] rounded-full flex items-center justify-center text-xl font-bold text-gray-700">{otherName.charAt(0).toUpperCase()}</div>
+                    <div>
+                      <h3 className="font-bold text-gray-800 text-lg">{otherName}</h3>
+                      <p className="text-gray-500 font-sans text-sm truncate max-w-200px md:max-w-md">{chat.lastMessage}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
     );
   }
 
-  // ==========================================
-  // SCENARIO B: ACTIVE 1-ON-1 CHAT VIEW
-  // ==========================================
+  // --- 5. RENDER DIRECT CHAT VIEW ---
   return (
-    <div className="flex flex-col h-screen bg-[#faf6e9] font-serif">
-      {/* HEADER WITH SWAP DEAL DETAILS */}
-      <div className="bg-[#b5c5d1] h-20 flex items-center px-6 shadow-sm shrink-0">
-        <button onClick={() => navigate(-1)} className="mr-4 hover:scale-110 transition-transform">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-          </svg>
-        </button>
-        <div>
-          <h2 className="text-xl font-bold text-gray-800 leading-tight">{ownerName}</h2>
-          <div className="flex items-center gap-2">
-            <span className="bg-[#5d782b] text-white text-[9px] px-2 py-0.5 rounded font-sans font-bold uppercase tracking-tighter shadow-sm">Swap Deal</span>
-            <p className="text-xs text-gray-700 font-sans italic truncate max-w-200px md:max-w-none">
-              {myOfferedBook ? `"${myOfferedBook}"` : "My Book"} ↔ "{bookTitle}"
-            </p>
-          </div>
-        </div>
+    <div className="flex flex-col h-screen bg-[#faf6e9] font-serif overflow-hidden">
+      {/* HEADER */}
+      <div className="bg-[#b5c5d1] h-16 flex items-center px-4 shadow-sm z-20 shrink-0">
+        <button onClick={() => navigate(-1)} className="mr-3 text-gray-800 font-bold">←</button>
+        <h2 className="font-bold text-gray-800 uppercase tracking-tight">{ownerName || 'Chat'}</h2>
       </div>
 
+      {/* NOTIFICATION BANNER */}
+      {("Notification" in window) && Notification.permission === "default" && (
+        <div className="bg-[#5d782b] text-white px-6 py-2 flex justify-between items-center text-[10px] uppercase font-bold tracking-widest z-20">
+          <span>Get alerts for your meetups?</span>
+          <button onClick={() => Notification.requestPermission()} className="bg-white text-[#5d782b] px-3 py-1 rounded-full">Allow</button>
+        </div>
+      )}
+
       {/* MESSAGES THREAD */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
         {messages.map((msg) => {
-          // Changed logic: Compare msg sender ID to the logged-in user's ID
           const isMe = msg.senderId === currentUser?.uid;
-          const isSystem = msg.senderId === 'system';
-          const isMeetup = msg.type === 'meetup';
+          
+          if (msg.type === 'meetup' && (msg.meetupData?.status === 'accepted' || msg.meetupData?.status === 'completed')) {
+            const isTimePassed = currentTime >= new Date(`${msg.meetupData.date}T${msg.meetupData.time}`);
+            return (
+              <div key={msg.id} className="flex flex-col items-center justify-center space-y-3 my-4">
+                <div className="bg-white border border-gray-200 rounded-2xl px-8 py-5 text-center shadow-sm max-w-sm">
+                  <p className="text-sm text-gray-800 leading-relaxed">
+                    {msg.meetupData.status === 'completed' ? <strong>🤝 Swap Completed!</strong> : <strong>Meetup Confirmed!</strong>}
+                    <br/>
+                    {msg.meetupData.status === 'completed' ? "You met up on " : "Meetup confirmed for "}
+                    <span className="font-bold text-[#5d782b]">{formatMeetupDateTime(msg.meetupData.date, msg.meetupData.time)}</span> at <strong>{msg.meetupData.location}</strong>.
+                  </p>
+                </div>
+                {msg.meetupData.status === 'accepted' && (
+                  <button 
+                    disabled={!isTimePassed}
+                    onClick={() => handleCompleteMeetup(msg.id)}
+                    className={`font-bold py-2 px-8 rounded-full text-[10px] uppercase tracking-widest transition shadow-sm ${
+                      isTimePassed ? "bg-gray-200 text-gray-700 hover:bg-gray-300" : "bg-gray-100 text-gray-400 cursor-not-allowed opacity-60"
+                    }`}
+                  >
+                    {isTimePassed ? "We Met Up" : "Waiting for Meetup..."}
+                  </button>
+                )}
+              </div>
+            );
+          }
 
           return (
-            <div key={msg.id} className={`flex ${isMe ? 'justify-end' : isSystem ? 'justify-center' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-md ${
-                isSystem ? 'bg-gray-100/80 text-gray-500 text-xs italic border border-gray-200 px-8 py-2' :
-                isMeetup ? 'bg-orange-50 border-2 border-orange-200 text-gray-800' :
-                isMe ? 'bg-[#5d782b] text-white rounded-tr-none' : 'bg-white text-gray-800 rounded-tl-none border border-gray-100'
-              }`}>
-                {isMeetup && <span className="block text-[10px] font-bold text-orange-600 mb-1 uppercase tracking-widest">Proposed Meetup</span>}
-                <p className={`text-sm md:text-base whitespace-pre-line leading-relaxed ${isSystem ? 'text-center' : ''}`}>{msg.text}</p>
-                {!isSystem && <p className={`text-[9px] mt-1 font-sans font-bold uppercase ${isMe ? 'text-white/60' : 'text-gray-400'}`}>{msg.time}</p>}
+            <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[80%] rounded-2xl px-4 py-3 shadow-sm relative ${isMe ? 'bg-[#5d782b] text-white' : 'bg-white text-gray-800'}`}>
+                {msg.type === 'image' ? (
+                  <img src={msg.imageUrl} alt="upload" className="rounded-lg max-h-60" />
+                ) : msg.type === 'meetup' ? (
+                  <div className="space-y-2">
+                    <div className="text-[10px] uppercase font-bold opacity-70 tracking-tighter">Proposed Meetup</div>
+                    <p className="text-sm whitespace-pre-line">{msg.text}</p>
+                    {!isMe && msg.meetupData?.status === 'pending' && (
+                      <button onClick={() => handleAcceptMeetup(msg.id)} className="w-full mt-2 bg-white text-[#5d782b] font-bold py-1 rounded text-xs border border-[#5d782b]">Accept Proposal</button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm">{msg.text}</p>
+                )}
+                <p className={`text-[9px] mt-1 text-right ${isMe ? 'opacity-70' : 'text-gray-400'}`}>{msg.time}</p>
               </div>
             </div>
           );
         })}
-        {/* Invisible div to scroll into view */}
         <div ref={scrollRef} />
       </div>
 
-      {/* CHAT INPUT BAR */}
-      <form onSubmit={handleSendMessage} className="p-4 bg-white border-t border-gray-200 flex items-center gap-3">
-        <button 
-          type="button" 
-          onClick={() => setShowMeetupModal(true)} 
-          className="p-3 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-100 transition-colors"
-          title="Set Meetup"
-        >
-           📅
-        </button>
-        <input
-          type="text"
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          placeholder="Message owner..."
-          className="flex-1 bg-gray-50 border-0 rounded-xl py-3 px-5 focus:ring-2 focus:ring-[#5d782b] outline-none font-sans"
-        />
-        <button type="submit" className="bg-[#5d782b] text-white px-6 py-3 rounded-xl font-bold hover:scale-105 transition-all shadow-lg uppercase text-xs tracking-widest">
-           Send
-        </button>
-      </form>
+      {/* INPUT BAR */}
+      <div className="bg-white border-t border-gray-100 p-4 shrink-0">
+        <div className="max-w-4xl mx-auto flex items-center gap-3">
+          <button type="button" onClick={() => setShowMeetupModal(true)} className="p-2 bg-[#faf6e9] rounded-lg hover:scale-105 transition shadow-sm">🗓️</button>
+          
+          <input type="file" accept="image/*" ref={fileInputRef} className="hidden" onChange={handleImageUpload} />
+          <button type="button" disabled={isUploadingImage} onClick={() => fileInputRef.current.click()} className="p-2 bg-[#faf6e9] rounded-lg hover:scale-105 transition shadow-sm">
+             {isUploadingImage ? "..." : "📷"}
+          </button>
 
-      {/* MEETUP DETAILS MODAL */}
+          <form onSubmit={handleSendMessage} className="flex-1 flex gap-2">
+            <input type="text" value={inputText} onChange={(e) => setInputText(e.target.value)} placeholder="Message..." className="flex-1 bg-[#f8f8f8] border-none rounded-xl py-3 px-5 text-sm outline-none font-sans"/>
+            <button type="submit" className="bg-[#5d782b] text-white px-6 py-3 rounded-xl font-bold uppercase text-[10px] tracking-widest shadow-md active:scale-95 transition">Send</button>
+          </form>
+        </div>
+      </div>
+
+      {/* MODAL */}
       {showMeetupModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl">
-            <h3 className="text-2xl font-bold text-gray-900 mb-6">Confirm Meetup</h3>
-            <div className="space-y-4 font-sans">
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Date</label>
-                <input type="date" className="w-full border-gray-200 rounded-xl p-3 bg-gray-50" 
-                  onChange={(e) => setMeetupDetails({...meetupDetails, date: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Time</label>
-                <input type="time" className="w-full border-gray-200 rounded-xl p-3 bg-gray-50" 
-                  onChange={(e) => setMeetupDetails({...meetupDetails, time: e.target.value})} />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Location</label>
-                <input type="text" placeholder="e.g. Starbucks KLCC" className="w-full border-gray-200 rounded-xl p-3 bg-gray-50" 
-                  onChange={(e) => setMeetupDetails({...meetupDetails, location: e.target.value})} />
-              </div>
-              <div className="flex gap-4 pt-6">
-                <button onClick={() => setShowMeetupModal(false)} className="flex-1 py-3 rounded-xl border border-gray-200 font-bold text-gray-400 uppercase text-xs tracking-widest">Cancel</button>
-                <button onClick={handleConfirmMeeting} className="flex-1 py-3 rounded-xl bg-[#5d782b] font-bold text-white shadow-lg uppercase text-xs tracking-widest">Send Proposal</button>
-              </div>
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-6 z-50">
+          <div className="bg-white rounded-32px p-8 w-full max-w-sm shadow-2xl space-y-5">
+            <h3 className="text-xl font-bold text-gray-800">Propose Meetup</h3>
+            <div className="space-y-3 font-sans">
+              <input type="text" placeholder="Location" className="w-full border-gray-200 border p-3 rounded-xl text-sm" value={meetupDetails.location} onChange={(e) => setMeetupDetails({...meetupDetails, location: e.target.value})} />
+              <input type="date" className="w-full border-gray-200 border p-3 rounded-xl text-sm" value={meetupDetails.date} onChange={(e) => setMeetupDetails({...meetupDetails, date: e.target.value})} />
+              <input type="time" className="w-full border-gray-200 border p-3 rounded-xl text-sm" value={meetupDetails.time} onChange={(e) => setMeetupDetails({...meetupDetails, time: e.target.value})} />
+            </div>
+            <div className="flex gap-3 pt-2 font-bold uppercase text-[10px] tracking-widest">
+              <button onClick={() => setShowMeetupModal(false)} className="flex-1 border border-gray-200 py-3 rounded-xl hover:bg-gray-50 transition">Cancel</button>
+              <button onClick={handleConfirmMeeting} className="flex-1 bg-[#5d782b] text-white py-3 rounded-xl shadow-lg active:scale-95 transition">Send Proposal</button>
             </div>
           </div>
         </div>

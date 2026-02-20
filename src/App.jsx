@@ -9,7 +9,8 @@ import ProfilePage from './pages/ProfilePage';
 import EditProfilePage from './pages/EditProfilePage';
 import BookDetailsPage from './pages/BookDetailsPage';
 import ChatPage from './pages/ChatPage';
-import RatingPage from './pages/RatingPage'; // <-- 1. IMPORT THE NEW PAGE HERE
+import RatingPage from './pages/RatingPage'; 
+import EditBookPage from './pages/EditBookPage';
 
 function App() {
   return (
@@ -28,6 +29,7 @@ function App() {
           
           {/* 2. ADD THE ROUTE HERE */}
           <Route path="/rating" element={<RatingPage />} /> 
+          <Route path="/edit-book/:id" element={<EditBookPage />} /> 
           
         </Routes>
       </div>

@@ -2,9 +2,11 @@ import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 // --- FIREBASE IMPORTS ---
-import { auth, db, storage } from '../firebase'; 
+import { auth, db } from '../firebase'; 
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+// --- VERCEL BLOB IMPORT ---
+import { put } from '@vercel/blob';
 
 function AddBookPage() {
   const navigate = useNavigate();
@@ -28,9 +30,12 @@ function AddBookPage() {
   const [condition, setCondition] = useState('Good / Lightly Read');
   const [synopsis, setSynopsis] = useState('');
   
+  // NEW: Added Location State
+  const [location, setLocation] = useState(''); 
+  
   // States for handling images
-  const [coverUrl, setCoverUrl] = useState(''); // Stores Google API URL or local preview URL
-  const [imageFile, setImageFile] = useState(null); // Stores the actual file if user uploads one manually
+  const [coverUrl, setCoverUrl] = useState(''); 
+  const [imageFile, setImageFile] = useState(null); 
 
   // --- Google Books API Search ---
   const handleSearch = async (e) => {
@@ -57,7 +62,7 @@ function AddBookPage() {
         
         const image = book.imageLinks?.thumbnail?.replace('http:', 'https:') || '';
         setCoverUrl(image);
-        setImageFile(null); // Clear any manual file if they use Google search
+        setImageFile(null); 
       } else {
         alert("Book not found in Google's database. No worries! You can type the details manually and upload your own cover.");
       }
@@ -73,12 +78,12 @@ function AddBookPage() {
   const handleImageUpload = (event) => {
     const file = event.target.files[0];
     if (file) {
-      setImageFile(file); // Save the actual file to state for uploading later
-      setCoverUrl(URL.createObjectURL(file)); // Create a temporary local URL just for the preview window
+      setImageFile(file); 
+      setCoverUrl(URL.createObjectURL(file)); 
     }
   };
 
-  // --- Save to Firebase Firestore & Storage ---
+  // --- Save to Firebase Firestore & Vercel Blob ---
   const handleSubmit = async (e) => {
     e.preventDefault();
     
@@ -93,16 +98,15 @@ function AddBookPage() {
     try {
       let finalCoverUrl = coverUrl;
 
-      // 1. If the user uploaded a custom image file, send it to Firebase Storage first
-      if (imageFile) {
-        // Create a unique file name using the current timestamp
-        const fileRef = ref(storage, `book_covers/${Date.now()}_${imageFile.name}`);
+      // 1. If the user uploaded a custom image file, send it to Vercel Blob first
+        if (imageFile) {
+        const blob = await put(`book_covers/${Date.now()}_${imageFile.name}`, imageFile, {
+          access: 'public',
+          token: "vercel_blob_rw_KEK87zzaDBf6xeR8_SxQV9ZGQMDc4ZYLdnOoXV8ISJAqS68" 
+        });
         
-        // Upload the file
-        const snapshot = await uploadBytes(fileRef, imageFile);
-        
-        // Get the permanent download URL from Storage
-        finalCoverUrl = await getDownloadURL(snapshot.ref);
+        // Get the permanent URL from Vercel
+        finalCoverUrl = blob.url;
       }
 
       // 2. Save all the text data + the permanent image URL to Firestore
@@ -112,7 +116,8 @@ function AddBookPage() {
         genre: genre,
         condition: condition,
         synopsis: synopsis,
-        coverUrl: finalCoverUrl, // This will be either the Google link or the Firebase Storage link
+        location: location, // NEW: Now saves the location to Firebase!
+        coverUrl: finalCoverUrl, 
         status: "Available",
         
         // Use the authenticated user's ID and Email
@@ -126,8 +131,8 @@ function AddBookPage() {
       navigate('/profile'); 
       
     } catch (error) {
-      console.error("Error adding book to Firebase: ", error);
-      alert("Failed to save the book. Check your console for details.");
+      console.error("Error adding book: ", error);
+      alert("Failed to save the book. Check your console for details or verify your Vercel Token.");
     } finally {
       setIsSaving(false);
     }
@@ -240,18 +245,33 @@ function AddBookPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-gray-700 font-sans text-sm font-bold mb-2">Condition</label>
-                <select 
-                  value={condition}
-                  onChange={(e) => setCondition(e.target.value)}
-                  className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg font-sans focus:outline-none focus:border-[#5d782b] cursor-pointer"
-                >
-                  <option value="Brand New">Brand New</option>
-                  <option value="Like New">Like New</option>
-                  <option value="Good / Lightly Read">Good / Lightly Read</option>
-                  <option value="Acceptable / Heavily Read">Acceptable / Heavily Read</option>
-                </select>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div>
+                  <label className="block text-gray-700 font-sans text-sm font-bold mb-2">Condition</label>
+                  <select 
+                    value={condition}
+                    onChange={(e) => setCondition(e.target.value)}
+                    className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg font-sans focus:outline-none focus:border-[#5d782b] cursor-pointer"
+                  >
+                    <option value="Brand New">Brand New</option>
+                    <option value="Like New">Like New</option>
+                    <option value="Good / Lightly Read">Good / Lightly Read</option>
+                    <option value="Acceptable / Heavily Read">Acceptable / Heavily Read</option>
+                  </select>
+                </div>
+                
+                {/* NEW: Location Input Box */}
+                <div>
+                  <label className="block text-gray-700 font-sans text-sm font-bold mb-2">Your Location</label>
+                  <input 
+                    type="text" 
+                    required
+                    value={location}
+                    onChange={(e) => setLocation(e.target.value)}
+                    placeholder="e.g. Kuala Lumpur, Selangor"
+                    className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg font-sans focus:outline-none focus:border-[#5d782b]"
+                  />
+                </div>
               </div>
 
               <div>

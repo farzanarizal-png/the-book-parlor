@@ -1,10 +1,10 @@
-import { initializeApp } from "firebase/app";
+// 1. UPDATE THIS IMPORT: Add getApps and getApp
+import { initializeApp, getApps, getApp } from "firebase/app"; 
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
-import { getStorage } from "firebase/storage"; // <-- NEW: Import Storage
+import { getStorage } from "firebase/storage"; 
 import { getAnalytics } from "firebase/analytics";
 
-// Your web app's Firebase configuration
 const firebaseConfig = {
   apiKey: "AIzaSyDY2kUbBvVt6G0GOH7WaHuEn1RAiBetW3Y",
   authDomain: "thebookparlor-4027b.firebaseapp.com",
@@ -15,13 +15,13 @@ const firebaseConfig = {
   measurementId: "G-Y30TEYYYEZ"
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
+// 2. THE FIX: Check if Firebase is already initialized before starting it
+const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const analytics = getAnalytics(app);
 
 // Initialize Firebase services
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const storage = getStorage(app); // <-- NEW: Initialize and export Storage
+export const storage = getStorage(app); 
 
 console.log("🔥 Firebase initialized successfully!");
