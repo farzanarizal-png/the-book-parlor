@@ -126,7 +126,8 @@ function ChatPage() {
     try {
       const blob = await put(`chat/${Date.now()}_${file.name}`, file, {
         access: 'public',
-        token: "vercel_blob_rw_KEK87zzaDBf6xeR8_SxQV9ZGQMDc4ZYLdnOoXV8ISJAqS68" 
+        // 🚨 Make sure you replace this with your actual Vercel Token via an environment variable!
+        token: "YOUR_VERCEL_TOKEN_HERE" 
       });
       await addDoc(collection(db, "chats", chatId, "messages"), {
         senderId: currentUser.uid,
@@ -192,25 +193,51 @@ function ChatPage() {
       <div className="min-h-screen bg-[#faf6e9] flex flex-col font-serif">
          <div className="p-6 border-b border-gray-200 flex items-center justify-between bg-white shadow-sm shrink-0">
           <h1 className="text-2xl font-bold text-gray-800 tracking-tight">Messages</h1>
-          <button onClick={() => navigate('/home')} className="text-[#5d782b] font-bold text-sm uppercase tracking-widest">Back</button>
+          <button onClick={() => navigate('/home')} className="text-[#5d782b] font-bold text-sm uppercase tracking-widest hover:text-[#4a6023] transition-colors">Back</button>
         </div>
+        
         <div className="flex-1 overflow-y-auto p-4 md:p-8">
-          <div className="max-w-3xl mx-auto space-y-3">
-            {inboxChats.map(chat => {
-              const otherId = chat.participants?.find(id => id !== currentUser?.uid);
-              const otherName = chat[`name_${otherId}`] || "Fellow Reader";
-              return (
-                <div key={chat.id} onClick={() => navigate('/chat', { state: { ownerId: otherId, ownerName: otherName, chatId: chat.id } })} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer flex items-center justify-between transition-all">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-[#cddce6] rounded-full flex items-center justify-center text-xl font-bold text-gray-700">{otherName.charAt(0).toUpperCase()}</div>
-                    <div>
-                      <h3 className="font-bold text-gray-800 text-lg">{otherName}</h3>
-                      <p className="text-gray-500 font-sans text-sm truncate max-w-200px md:max-w-md">{chat.lastMessage}</p>
+          <div className="max-w-3xl mx-auto space-y-3 h-full">
+            
+            {/* 🌟 THE NEW EMPTY STATE LOGIC 🌟 */}
+            {inboxChats.length === 0 ? (
+              <div className="flex flex-col items-center justify-center mt-20 text-center h-full">
+                <div className="w-32 h-32 mb-6 bg-[#cad3c3] rounded-full flex items-center justify-center shadow-inner opacity-80">
+                  <svg className="w-16 h-16 text-[#6b7b5c]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </div>
+                <h2 className="text-3xl font-bold text-[#2d3a24] mb-3">It's awfully quiet in here...</h2>
+                <p className="text-[#4a583d] text-lg mb-8 max-w-md font-sans">
+                  You haven't started any conversations yet! Go explore the parlor to find books you'd love to trade, and drop the owners a message.
+                </p>
+                <button 
+                  onClick={() => navigate('/home')} 
+                  className="bg-[#6b7b5c] hover:bg-[#536145] text-white px-8 py-3 rounded-full text-lg font-bold transition-all shadow-md hover:shadow-lg transform hover:-translate-y-1 font-sans flex items-center space-x-2"
+                >
+                  <span>Explore Books</span>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                </button>
+              </div>
+            ) : (
+              /* EXISTING INBOX LIST RENDERING */
+              inboxChats.map(chat => {
+                const otherId = chat.participants?.find(id => id !== currentUser?.uid);
+                const otherName = chat[`name_${otherId}`] || "Fellow Reader";
+                return (
+                  <div key={chat.id} onClick={() => navigate('/chat', { state: { ownerId: otherId, ownerName: otherName, chatId: chat.id } })} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 hover:shadow-md cursor-pointer flex items-center justify-between transition-all">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-[#cddce6] rounded-full flex items-center justify-center text-xl font-bold text-gray-700">{otherName.charAt(0).toUpperCase()}</div>
+                      <div>
+                        <h3 className="font-bold text-gray-800 text-lg">{otherName}</h3>
+                        <p className="text-gray-500 font-sans text-sm truncate max-w-200px md:max-w-md">{chat.lastMessage}</p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
+
           </div>
         </div>
       </div>
@@ -310,7 +337,7 @@ function ChatPage() {
       {/* MODAL */}
       {showMeetupModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-6 z-50">
-          <div className="bg-white rounded-32px p-8 w-full max-w-sm shadow-2xl space-y-5">
+          <div className="bg-white rounded-2rem p-8 w-full max-w-sm shadow-2xl space-y-5">
             <h3 className="text-xl font-bold text-gray-800">Propose Meetup</h3>
             <div className="space-y-3 font-sans">
               <input type="text" placeholder="Location" className="w-full border-gray-200 border p-3 rounded-xl text-sm" value={meetupDetails.location} onChange={(e) => setMeetupDetails({...meetupDetails, location: e.target.value})} />

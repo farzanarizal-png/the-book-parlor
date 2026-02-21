@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 
 // --- FIREBASE IMPORTS ---
 import { auth, db } from '../firebase'; 
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore'; 
+import { collection, doc, getDoc, getDocs, onSnapshot } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 
 function HomePage() {
@@ -22,15 +22,21 @@ function HomePage() {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
+  // Toggle State for "See All" Recommended Books
+  const [showAllRecommended, setShowAllRecommended] = useState(false);
+  
   // Notification State
   const [notifications, setNotifications] = useState([]);
 
   const hasUnread = notifications.some(n => n.unread);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let unsubscribeBooks;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
         try {
+          // 1. Fetch Current User Profile
           let fetchedName = "Reader";
           const userDocRef = doc(db, 'users', user.uid);
           const userDocSnap = await getDoc(userDocRef);
@@ -49,24 +55,49 @@ function HomePage() {
 
           setUserName(fetchedName);
 
-          // --- Set Dynamic Notifications based on user data ---
+          // 2. Set Dynamic Notifications
           setNotifications([
-            { id: 1, text: `Welcome to The Book Parlor, ${fetchedName}! Claim your first spot on the shelf.`, time: "Just now", unread: true },
-            { id: 2, text: "Explore recommended books in your area.", time: "2 mins ago", unread: true }
+            { id: 1, text: `Welcome to The Book Parlor, ${fetchedName}! Claim your first spot on the shelf.`, time: "Just now", unread: true }
           ]);
 
-          const booksCollection = collection(db, 'books');
-          const bookSnapshot = await getDocs(booksCollection);
-          const allBooks = bookSnapshot.docs.map(bookDoc => ({
-            id: bookDoc.id,
-            ...bookDoc.data()
-          }));
+          // 3. Fetch All Users mapping (to fix "Unknown User" & get Location)
+          const usersCollection = collection(db, 'users');
+          const usersSnapshot = await getDocs(usersCollection);
+          const usersMap = {};
+          usersSnapshot.forEach(userDoc => {
+            usersMap[userDoc.id] = userDoc.data();
+          });
 
-          setMyBookshelf(allBooks.filter(book => book.ownerId === user.uid));
-          setRecommendedBooks(allBooks.filter(book => book.ownerId !== user.uid));
+          // 4. REAL-TIME FIREBASE LINK (Books)
+          const booksCollection = collection(db, 'books');
+          
+          unsubscribeBooks = onSnapshot(booksCollection, (snapshot) => {
+            const allBooks = snapshot.docs.map(bookDoc => {
+              const bookData = bookDoc.data();
+              // Cross-reference the book's ownerId with our usersMap
+              const ownerInfo = usersMap[bookData.ownerId] || {};
+              
+              return {
+                id: bookDoc.id,
+                ...bookData,
+                // Fallback structure: checks book doc first, then user doc, then defaults
+                ownerName: bookData.ownerName || ownerInfo.name || ownerInfo.username || 'Unknown User',
+                ownerLocation: bookData.location || ownerInfo.location || 'Unknown Location',
+                ownerRating: bookData.ownerRating || ownerInfo.rating || 'New'
+              };
+            });
+
+            // Filter books instantly
+            setMyBookshelf(allBooks.filter(book => book.ownerId === user.uid));
+            setRecommendedBooks(allBooks.filter(book => book.ownerId !== user.uid));
+            setIsLoading(false);
+          }, (error) => {
+            console.error("Error with real-time books listener:", error);
+            setIsLoading(false);
+          });
+
         } catch (error) {
-          console.error("Error fetching data:", error);
-        } finally {
+          console.error("Error fetching user data:", error);
           setIsLoading(false);
         }
       } else {
@@ -74,13 +105,16 @@ function HomePage() {
       }
     });
 
-    return () => unsubscribe();
+    // Cleanup listeners
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeBooks) unsubscribeBooks();
+    };
   }, [navigate]);
 
   // --- SIGN OUT HANDLER ---
   const handleSignOut = async () => {
     try {
-      localStorage.removeItem('bookParlorRecentUsers');
       await signOut(auth);
       navigate('/login');
     } catch (error) {
@@ -88,16 +122,12 @@ function HomePage() {
     }
   };
 
-  // --- TOGGLE NOTIFICATIONS ---
+  // --- TOGGLE MENUS ---
   const toggleNotifications = () => {
     setIsNotifOpen(!isNotifOpen);
     setIsDropdownOpen(false); 
     setIsFilterOpen(false);   
-    
-    // Mark all as read when opening the menu
-    if (!isNotifOpen) {
-      setNotifications(prev => prev.map(n => ({ ...n, unread: false })));
-    }
+    if (!isNotifOpen) setNotifications(prev => prev.map(n => ({ ...n, unread: false })));
   };
 
   const toggleProfileDropdown = () => {
@@ -119,13 +149,15 @@ function HomePage() {
     if (item === 'Rating') navigate('/rating');
   };
 
+  // --- SEARCH FILTER LOGIC ---
   const filteredRecommendedBooks = recommendedBooks.filter((book) => {
     if (!searchQuery) return true; 
     const lowerCaseQuery = searchQuery.toLowerCase();
     return (
       (book.title && book.title.toLowerCase().includes(lowerCaseQuery)) ||
       (book.author && book.author.toLowerCase().includes(lowerCaseQuery)) ||
-      (book.genre && book.genre.toLowerCase().includes(lowerCaseQuery))
+      (book.genre && book.genre.toLowerCase().includes(lowerCaseQuery)) ||
+      (book.ownerLocation && book.ownerLocation.toLowerCase().includes(lowerCaseQuery))
     );
   });
 
@@ -134,12 +166,13 @@ function HomePage() {
     return name.trim().split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
   };
 
+  // --- LOADING SCREEN ---
   if (isLoading) {
-    return <div className="flex h-screen items-center justify-center bg-[#faf6e9] font-serif text-2xl">Loading your parlor...</div>;
+    return <div className="flex h-screen items-center justify-center bg-[#8b9c7d] font-serif text-2xl text-white">Loading your parlor...</div>;
   }
 
   return (
-    <div className="flex h-screen bg-[#faf6e9] font-serif overflow-hidden">
+    <div className="flex h-screen bg-[#8b9c7d] font-serif overflow-hidden">
       
       {/* --- SIDEBAR --- */}
       <div className="w-64 bg-[#b5c5d1] flex flex-col items-center py-8 z-20 shadow-lg shrink-0">
@@ -165,10 +198,10 @@ function HomePage() {
       </div>
 
       {/* --- MAIN CONTENT AREA --- */}
-      <div className="flex-1 flex flex-col relative h-full bg-[#faf6e9]">
+      <div className="flex-1 flex flex-col relative h-full bg-[#8b9c7d]">
         
         {/* --- HEADER SECTION --- */}
-        <div className="px-10 pt-10 pb-6 z-30 bg-[#dde5eb]">
+        <div className="px-10 pt-10 pb-6 z-30 bg-[#dde5eb] rounded-bl-2rem shadow-sm">
           <h1 className="text-5xl italic font-bold text-gray-800 mb-2 drop-shadow-sm capitalize">
             Welcome, {userName}!
           </h1>
@@ -183,7 +216,7 @@ function HomePage() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search Books by title, author, or genre..." 
+                placeholder="Search Books by title, author, location..." 
                 className="bg-transparent border-none outline-none text-lg w-full text-gray-700 placeholder-gray-400 font-sans"
               />
               
@@ -203,35 +236,24 @@ function HomePage() {
                   </div>
                   <div className="mb-4">
                     <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Location</label>
-                    <select className="w-full mt-1.5 bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm text-gray-700 outline-none focus:border-[#5d782b] focus:ring-1 focus:ring-[#5d782b] transition-all cursor-pointer">
-                    <option>All Locations</option>
+                    <select className="w-full mt-1.5 bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm text-gray-700 outline-none">
+                      <option>All Locations</option>
                       <option>Kuala Lumpur</option>
                       <option>Selangor</option>
-                      <option>Perak</option>
-                      <option>Penang</option>
-                      <option>Kelantan</option>
-                      <option>Terengganu</option>
-                      <option>Perlis</option>
-                      <option>Pahang</option>
-                      <option>Negeri Sembilan</option>
                       <option>Johor</option>
-                      <option>Melaka</option>
+                      <option>Penang</option>
                     </select>
                   </div>
-
                   <div className="mb-6">
                     <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Genre</label>
-                    <select className="w-full mt-1.5 bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm text-gray-700 outline-none focus:border-[#5d782b] focus:ring-1 focus:ring-[#5d782b] transition-all cursor-pointer">
+                    <select className="w-full mt-1.5 bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm text-gray-700 outline-none">
                       <option>All Genres</option>
                       <option>Fiction</option>
-                      <option>Non-Fiction</option>
-                      <option>Mystery / Thriller</option>
-                      <option>Sci-Fi / Fantasy</option>
+                      <option>Mystery</option>
                       <option>Romance</option>
                     </select>
                   </div>
-                  
-                  <button onClick={toggleFilter} className="w-full bg-[#5d782b] hover:bg-[#4a6023] text-white py-2.5 rounded-lg text-sm font-semibold transition-colors shadow-sm transform hover:scale-[1.02]">
+                  <button onClick={toggleFilter} className="w-full bg-[#5d782b] hover:bg-[#4a6023] text-white py-2.5 rounded-lg text-sm font-semibold transition-colors">
                     Apply Filters
                   </button>
                 </div>
@@ -240,7 +262,7 @@ function HomePage() {
 
             <div className="flex items-center space-x-6 text-gray-600 relative">
               
-              {/* --- NOTIFICATION BELL & DROPDOWN --- */}
+              {/* --- NOTIFICATION BELL --- */}
               <div className="relative">
                 <div onClick={toggleNotifications} className="relative cursor-pointer group p-1">
                   <svg className={`w-7 h-7 transition-colors ${isNotifOpen ? 'text-gray-900' : 'hover:text-gray-900'}`} fill="currentColor" viewBox="0 0 24 24">
@@ -248,25 +270,16 @@ function HomePage() {
                   </svg>
                   {hasUnread && <span className="absolute top-1 right-1 w-3 h-3 bg-blue-500 rounded-full border-2 border-[#dde5eb]"></span>}
                 </div>
-
                 {isNotifOpen && (
-                  <div className="absolute right-0 mt-4 w-80 bg-white rounded-xl shadow-2xl border border-gray-100 z-50 overflow-hidden font-sans animate-in fade-in slide-in-from-top-2 duration-200">
-                    <div className="bg-gray-50 border-b border-gray-100 px-5 py-3 flex justify-between items-center">
-                      <h3 className="font-bold text-gray-800">Notifications</h3>
-                    </div>
+                  <div className="absolute right-0 mt-4 w-80 bg-white rounded-xl shadow-2xl z-50 overflow-hidden font-sans">
+                    <div className="bg-gray-50 border-b px-5 py-3"><h3 className="font-bold">Notifications</h3></div>
                     <div className="max-h-80 overflow-y-auto">
-                      {notifications.length > 0 ? (
-                        notifications.map(notif => (
-                          <div key={notif.id} className={`px-5 py-4 border-b border-gray-50 hover:bg-gray-50 transition-colors cursor-pointer ${notif.unread ? 'bg-blue-50/40' : ''}`}>
-                            <p className="text-sm text-gray-800 mb-1 font-medium leading-snug">{notif.text}</p>
-                            <span className="text-xs text-gray-400 font-medium">{notif.time}</span>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="px-5 py-8 text-center text-gray-500 text-sm">
-                          No new notifications
+                      {notifications.map(notif => (
+                        <div key={notif.id} className="px-5 py-4 border-b hover:bg-gray-50 cursor-pointer">
+                          <p className="text-sm text-gray-800 mb-1">{notif.text}</p>
+                          <span className="text-xs text-gray-400">{notif.time}</span>
                         </div>
-                      )}
+                      ))}
                     </div>
                   </div>
                 )}
@@ -280,25 +293,26 @@ function HomePage() {
               {/* Profile Dropdown */}
               <div className="relative">
                 <div className="flex items-center space-x-2 cursor-pointer ml-4 group" onClick={toggleProfileDropdown}>
-                  <div className="w-10 h-10 rounded-full bg-[#f97316] text-white flex items-center justify-center font-sans font-bold text-sm shadow-sm uppercase overflow-hidden border border-gray-200">
-                    {profileImage ? (
-                      <img src={profileImage} alt="Profile" className="w-full h-full object-cover" />
-                    ) : (
-                      getInitials(userName)
-                    )}
+                  <div className="w-10 h-10 rounded-full bg-[#f97316] text-white flex items-center justify-center font-sans font-bold text-sm uppercase overflow-hidden">
+                    {profileImage ? <img src={profileImage} alt="Profile" className="w-full h-full object-cover" /> : getInitials(userName)}
                   </div>
                   <span className="text-xl text-gray-800 capitalize">{userName}</span>
-                  <svg className={`w-5 h-5 text-gray-800 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  
+                  {/* --- NEW DROPDOWN CHEVRON ICON --- */}
+                  <svg 
+                    className={`w-5 h-5 text-gray-600 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} 
+                    fill="none" 
+                    stroke="currentColor" 
+                    viewBox="0 0 24 24"
+                  >
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
                   </svg>
-                </div>
 
+                </div>
                 {isDropdownOpen && (
-                  <div className="absolute right-0 mt-4 w-48 bg-white rounded-lg shadow-2xl border border-gray-100 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200">
-                    <div className="py-2">
-                      <button onClick={() => navigate('/profile')} className="w-full text-left px-5 py-3 text-gray-700 hover:bg-gray-50 hover:text-gray-900 font-serif transition-colors border-l-4 border-transparent hover:border-gray-500">My Profile</button>
-                      <button onClick={handleSignOut} className="w-full text-left px-5 py-3 text-gray-700 hover:bg-red-50 hover:text-red-600 font-serif transition-colors border-l-4 border-transparent hover:border-red-500">Sign Out</button>
-                    </div>
+                  <div className="absolute right-0 mt-4 w-48 bg-white rounded-lg shadow-2xl z-50">
+                    <button onClick={() => navigate('/profile')} className="w-full text-left px-5 py-3 hover:bg-gray-50">My Profile</button>
+                    <button onClick={handleSignOut} className="w-full text-left px-5 py-3 hover:bg-red-50 text-red-600">Sign Out</button>
                   </div>
                 )}
               </div>
@@ -306,28 +320,26 @@ function HomePage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-10 pt-6 pb-32 hide-scrollbar z-10 bg-[#faf6e9]">
+        <div className="flex-1 overflow-y-auto px-10 pt-8 pb-32 hide-scrollbar z-10">
+          
           {/* --- MY BOOKSHELF --- */}
-          <div className="bg-[#a3b19b] rounded-t-2rem p-8 pb-10 shadow-inner min-h-300px">
+          <div className="mb-12">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-3xl font-bold text-gray-800">My Bookshelf</h2>
-              <button onClick={() => navigate('/profile')} className="bg-[#5a7034] hover:bg-[#465728] text-white px-6 py-2 rounded-full text-lg transition-colors shadow-md">See All {'>'}</button>
+              <h2 className="text-3xl font-bold text-[#2d3a24]">My Bookshelf</h2>
+              <button onClick={() => navigate('/profile')} className="bg-[#6b7b5c] hover:bg-[#536145] text-white px-5 py-1.5 rounded-full text-md transition-colors shadow-md">See All {'>'}</button>
             </div>
             {myBookshelf.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 bg-white/20 rounded-xl border-2 border-dashed border-white/50 shadow-sm">
-                <p className="text-xl italic text-gray-800 mb-2 font-semibold">Your shelf is looking a little bare!</p>
-                <button onClick={() => navigate('/add-book')} className="bg-[#faf6e9] text-[#5a7034] font-bold px-8 py-2.5 rounded-full hover:bg-white transition-all shadow-md transform hover:scale-105 font-sans">+ Add Book</button>
-              </div>
+              <p className="text-lg italic text-[#4a583d]">Your shelf is looking a little bare! Add a book to get started.</p>
             ) : (
-              <div className="flex space-x-8 overflow-x-auto pb-6 hide-scrollbar">
+              <div className="flex space-x-8 overflow-x-auto pb-4 hide-scrollbar">
                 {myBookshelf.map((book) => (
-                  <div key={book.id} onClick={() => navigate(`/book/${book.id}`)} className="flex flex-col items-center min-w-140px group cursor-pointer relative">
-                    <div className="w-32 h-48 bg-[#cad3c3] relative flex items-center justify-center rounded-md shadow-md mb-4 transition-transform duration-300 group-hover:-translate-y-2 group-hover:shadow-xl overflow-hidden border border-white/20 text-center px-2">
-                       <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase tracking-widest shadow-md z-10 ${book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'}`}>{book.status || 'Available'}</div>
-                       {book.coverUrl ? <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" /> : <span className="text-gray-600 text-sm font-sans font-medium leading-snug z-10">{book.title}</span>}
+                  <div key={book.id} onClick={() => navigate(`/book/${book.id}`)} className="flex flex-col items-center min-w-140px group cursor-pointer">
+                    <div className="w-32 h-48 bg-[#cad3c3] relative flex items-center justify-center rounded-md shadow-md mb-2 transition-transform duration-300 group-hover:-translate-y-1 overflow-hidden">
+                       <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase z-10 ${book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'}`}>{book.status || 'Available'}</div>
+                       {book.coverUrl ? <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" /> : <span className="text-gray-600 text-sm font-sans z-10">{book.title}</span>}
                     </div>
-                    <h3 className="font-bold text-gray-900 text-center leading-tight mb-1 text-sm">{book.title}</h3>
-                    <p className="text-gray-700 text-xs text-center">{book.author}</p>
+                    <h3 className="font-bold text-[#2d3a24] text-center text-sm w-full truncate">{book.title}</h3>
+                    <p className="text-[#4a583d] text-xs text-center w-full truncate">{book.author}</p>
                   </div>
                 ))}
               </div>
@@ -335,34 +347,55 @@ function HomePage() {
           </div>
 
           {/* --- RECOMMENDED SECTION --- */}
-          <div className="bg-[#a3b19b] p-8 pb-12 shadow-inner mt-2px">
-            <h2 className="text-3xl font-bold text-gray-800 mb-6">Recommended</h2>
-            <div className="flex space-x-8 overflow-x-auto pb-6 hide-scrollbar">
+          <div>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-3xl font-bold text-[#2d3a24]">Recommended</h2>
+              <button 
+                onClick={() => setShowAllRecommended(!showAllRecommended)} 
+                className="bg-[#6b7b5c] hover:bg-[#536145] text-white px-5 py-1.5 rounded-full text-md transition-colors shadow-md"
+              >
+                {showAllRecommended ? 'Show Less' : 'See All >'}
+              </button>
+            </div>
+            
+            <div className={`${showAllRecommended ? 'grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-y-10 gap-x-6' : 'flex space-x-8 overflow-x-auto pb-6 hide-scrollbar'}`}>
               {filteredRecommendedBooks.length > 0 ? (
                 filteredRecommendedBooks.map((book) => (
-                  <div key={book.id} onClick={() => navigate(`/book/${book.id}`)} className="flex flex-col items-center min-w-140px group cursor-pointer relative">
-                    <div className="w-32 h-48 bg-[#cad3c3] relative flex items-center justify-center rounded-md shadow-md mb-4 transition-transform duration-300 group-hover:-translate-y-2 group-hover:shadow-xl overflow-hidden border border-white/20 text-center px-2">
+                  <div key={book.id} onClick={() => navigate(`/book/${book.id}`)} className={`flex flex-col items-center group cursor-pointer ${showAllRecommended ? 'w-full' : 'min-w-150px w-150px'}`}>
+                    
+                    <div className="w-32 h-48 bg-[#cad3c3] relative flex items-center justify-center rounded-md shadow-md mb-3 transition-transform duration-300 group-hover:-translate-y-1 overflow-hidden">
                        <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase tracking-widest shadow-md z-10 ${book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'}`}>{book.status || 'Available'}</div>
-                       {book.coverUrl ? <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" /> : <span className="text-gray-600 text-sm font-sans font-medium leading-snug z-10">{book.title}</span>}
+                       {book.coverUrl ? <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" /> : <span className="text-gray-600 text-sm font-sans font-medium leading-snug z-10 text-center px-1">{book.title}</span>}
                     </div>
-                    <h3 className="font-bold text-gray-900 text-center leading-tight mb-1 text-sm">{book.title}</h3>
-                    <p className="text-gray-700 text-xs text-center">{book.author}</p>
+                    
+                    <h3 className="font-bold text-[#2d3a24] text-center leading-tight mb-1 text-sm w-full truncate px-1">{book.title}</h3>
+                    <p className="text-[#4a583d] text-xs text-center w-full truncate mb-1">{book.author}</p>
+                    
+                    {/* Updated Owner & Location Badge */}
+                    <div className="flex flex-col w-full px-2 mt-1 bg-white/50 rounded-lg py-1.5 border border-white/50 shadow-sm font-sans">
+                      <div className="flex items-center justify-between w-full mb-0.5">
+                        <span className="text-[10px] text-gray-800 font-bold truncate pr-1">👤 {book.ownerName}</span>
+                        <span className="text-[10px] text-yellow-700 font-bold whitespace-nowrap">★ {book.ownerRating}</span>
+                      </div>
+                      <span className="text-[9px] text-gray-600 truncate">📍 {book.ownerLocation}</span>
+                    </div>
+
                   </div>
                 ))
               ) : (
-                <p className="text-gray-800 italic w-full text-center mt-4">No books found matching "{searchQuery}"</p>
+                <p className="text-[#2d3a24] italic w-full mt-4">No books found matching your search.</p>
               )}
             </div>
           </div>
         </div>
 
         {/* --- CUSTOM FAB --- */}
-        <div onClick={() => navigate('/add-book')} className="absolute bottom-8 right-8 flex flex-col items-center justify-center w-36 h-36 bg-white/80 backdrop-blur-sm rounded-full shadow-2xl cursor-pointer hover:scale-105 hover:bg-white transition-all z-50 border border-white group">
+        <div onClick={() => navigate('/add-book')} className="absolute bottom-8 right-8 flex flex-col items-center justify-center w-32 h-32 bg-[#f4f2e9] rounded-full shadow-2xl cursor-pointer hover:scale-105 transition-all z-50">
           <div className="relative mb-1 flex justify-center items-center">
-            <svg width="60" height="40" viewBox="0 0 50 50" fill="none" className="group-hover:scale-105 transition-transform"><path d="M28 6C28 6 20 0 10 0C4 0 2 6 2 6V42C2 42 6 38 12 38C20 38 28 44 28 44V6Z" fill="#7a8b99"/><path d="M32 6C32 6 40 0 50 0C56 0 58 6 58 6V42C58 42 54 38 48 38C40 38 32 44 32 44V6Z" fill="#7a8b99"/></svg>
-            <div className="absolute inset-0 flex items-center justify-center pt-2"><div className="bg-white rounded-full w-5 h-5 flex items-center justify-center shadow-sm"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#7a8b99" strokeWidth="4" strokeLinecap="round"><line x1="12" y1="3" x2="12" y2="21"></line><line x1="3" y1="12" x2="21" y2="12"></line></svg></div></div>
+            <svg width="40" height="30" viewBox="0 0 50 50" fill="none"><path d="M28 6C28 6 20 0 10 0C4 0 2 6 2 6V42C2 42 6 38 12 38C20 38 28 44 28 44V6Z" fill="#7a8b99"/><path d="M32 6C32 6 40 0 50 0C56 0 58 6 58 6V42C58 42 54 38 48 38C40 38 32 44 32 44V6Z" fill="#7a8b99"/></svg>
+            <div className="absolute inset-0 flex items-center justify-center pt-1"><div className="bg-white rounded-full w-4 h-4 flex items-center justify-center shadow-sm"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#7a8b99" strokeWidth="4" strokeLinecap="round"><line x1="12" y1="3" x2="12" y2="21"></line><line x1="3" y1="12" x2="21" y2="12"></line></svg></div></div>
           </div>
-          <div className="text-center font-serif text-[14px] leading-tight text-gray-800 font-medium mt-1">Add a New<br/>Book</div>
+          <div className="text-center font-serif text-[12px] leading-tight text-gray-800 font-medium mt-1">Add a New<br/>Book</div>
         </div>
       </div>
 
