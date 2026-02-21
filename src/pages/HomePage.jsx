@@ -13,7 +13,7 @@ function HomePage() {
   const [myBookshelf, setMyBookshelf] = useState([]);
   const [recommendedBooks, setRecommendedBooks] = useState([]);
   const [userName, setUserName] = useState("Reader");
-  const [profileImage, setProfileImage] = useState(null); 
+  const [profileImage, setProfileImage] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // UI States
@@ -116,6 +116,8 @@ function HomePage() {
   const handleSignOut = async () => {
     try {
       await signOut(auth);
+      // ADDED: Clear recent users from local storage on log out
+      localStorage.removeItem('bookParlorRecentUsers');
       navigate('/login');
     } catch (error) {
       console.error("Error signing out:", error);
@@ -307,7 +309,6 @@ function HomePage() {
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
                   </svg>
-
                 </div>
                 {isDropdownOpen && (
                   <div className="absolute right-0 mt-4 w-48 bg-white rounded-lg shadow-2xl z-50">
@@ -335,8 +336,8 @@ function HomePage() {
                 {myBookshelf.map((book) => (
                   <div key={book.id} onClick={() => navigate(`/book/${book.id}`)} className="flex flex-col items-center min-w-140px group cursor-pointer">
                     <div className="w-32 h-48 bg-[#cad3c3] relative flex items-center justify-center rounded-md shadow-md mb-2 transition-transform duration-300 group-hover:-translate-y-1 overflow-hidden">
-                       <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase z-10 ${book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'}`}>{book.status || 'Available'}</div>
-                       {book.coverUrl ? <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" /> : <span className="text-gray-600 text-sm font-sans z-10">{book.title}</span>}
+                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase z-10 ${book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'}`}>{book.status || 'Available'}</div>
+                      {book.coverUrl ? <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" /> : <span className="text-gray-600 text-sm font-sans z-10">{book.title}</span>}
                     </div>
                     <h3 className="font-bold text-[#2d3a24] text-center text-sm w-full truncate">{book.title}</h3>
                     <p className="text-[#4a583d] text-xs text-center w-full truncate">{book.author}</p>
@@ -362,12 +363,10 @@ function HomePage() {
               {filteredRecommendedBooks.length > 0 ? (
                 filteredRecommendedBooks.map((book) => (
                   <div key={book.id} onClick={() => navigate(`/book/${book.id}`)} className={`flex flex-col items-center group cursor-pointer ${showAllRecommended ? 'w-full' : 'min-w-150px w-150px'}`}>
-                    
                     <div className="w-32 h-48 bg-[#cad3c3] relative flex items-center justify-center rounded-md shadow-md mb-3 transition-transform duration-300 group-hover:-translate-y-1 overflow-hidden">
-                       <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase tracking-widest shadow-md z-10 ${book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'}`}>{book.status || 'Available'}</div>
-                       {book.coverUrl ? <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" /> : <span className="text-gray-600 text-sm font-sans font-medium leading-snug z-10 text-center px-1">{book.title}</span>}
+                      <div className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-sans font-bold text-[8px] uppercase tracking-widest shadow-md z-10 ${book.status === 'Available' ? 'bg-[#5d782b] text-white' : 'bg-orange-500 text-white'}`}>{book.status || 'Available'}</div>
+                      {book.coverUrl ? <img src={book.coverUrl} alt={book.title} className="w-full h-full object-cover absolute inset-0 z-0" /> : <span className="text-gray-600 text-sm font-sans font-medium leading-snug z-10 text-center px-1">{book.title}</span>}
                     </div>
-                    
                     <h3 className="font-bold text-[#2d3a24] text-center leading-tight mb-1 text-sm w-full truncate px-1">{book.title}</h3>
                     <p className="text-[#4a583d] text-xs text-center w-full truncate mb-1">{book.author}</p>
                     
@@ -379,7 +378,6 @@ function HomePage() {
                       </div>
                       <span className="text-[9px] text-gray-600 truncate">📍 {book.ownerLocation}</span>
                     </div>
-
                   </div>
                 ))
               ) : (
