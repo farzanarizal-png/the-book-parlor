@@ -165,6 +165,19 @@ function ChatPage() {
     await updateDoc(doc(db, "chats", chatId, "messages", id), { "meetupData.status": "completed" });
     await updateChatMetadata("🤝 Swap Completed!");
     
+    // 🔥 FIX: Create the pending rating document in Firebase so Rating.jsx can see it
+    try {
+      await addDoc(collection(db, "ratings"), {
+        reviewerId: currentUser.uid,
+        revieweeId: safeOwnerId,
+        partnerName: ownerName || "Fellow Reader",
+        status: 'pending',
+        createdAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error("Error creating pending rating:", error);
+    }
+
     // REDIRECT TO RATING PAGE
     navigate('/rating', { 
       state: { 

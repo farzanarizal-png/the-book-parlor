@@ -243,7 +243,15 @@ function HomePage() {
                       <option>Kuala Lumpur</option>
                       <option>Selangor</option>
                       <option>Johor</option>
+                      <option>Melaka</option>
+                      <option>Negeri Sembilan</option>
+                      <option>Perak</option>
                       <option>Penang</option>
+                      <option>Kedah</option>
+                      <option>Pahang</option>
+                      <option>Terengganu</option>
+                      <option>Perlis</option>
+
                     </select>
                   </div>
                   <div className="mb-6">
@@ -251,6 +259,8 @@ function HomePage() {
                     <select className="w-full mt-1.5 bg-gray-50 border border-gray-200 rounded-lg p-2.5 text-sm text-gray-700 outline-none">
                       <option>All Genres</option>
                       <option>Fiction</option>
+                      <option>Non-Fiction</option>
+                      <option>Thrilller</option>
                       <option>Mystery</option>
                       <option>Romance</option>
                     </select>
