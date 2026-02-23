@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 
 // --- FIREBASE IMPORTS ---
 import { auth, db } from '../firebase'; 
-import { collection, doc, getDoc, getDocs, onSnapshot } from 'firebase/firestore'; 
+import { collection, doc, getDoc, getDocs, onSnapshot, query, where, updateDoc } from 'firebase/firestore'; 
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 
 function HomePage() {
@@ -30,8 +30,21 @@ function HomePage() {
 
   const hasUnread = notifications.some(n => n.unread);
 
+  // --- TIME FORMATTER ---
+  const formatTime = (timestamp) => {
+    if (!timestamp) return 'Just now';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    const diffMins = Math.floor((new Date() - date) / 60000);
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHrs = Math.floor(diffMins / 60);
+    if (diffHrs < 24) return `${diffHrs}h ago`;
+    return `${Math.floor(diffHrs / 24)}d ago`;
+  };
+
   useEffect(() => {
     let unsubscribeBooks;
+    let unsubscribeNotifs;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -55,10 +68,33 @@ function HomePage() {
 
           setUserName(fetchedName);
 
-          // 2. Set Dynamic Notifications
-          setNotifications([
-            { id: 1, text: `Welcome to The Book Parlor, ${fetchedName}! Claim your first spot on the shelf.`, time: "Just now", unread: true }
-          ]);
+          // 2. REAL-TIME FIREBASE LINK (Notifications: Swap Updates & Meetup Reminders)
+          const notifsCollection = collection(db, 'notifications');
+          const qNotifs = query(notifsCollection, where('userId', '==', user.uid));
+          
+          unsubscribeNotifs = onSnapshot(qNotifs, (snapshot) => {
+            const fetchedNotifs = snapshot.docs.map(doc => ({
+              id: doc.id,
+              text: doc.data().text || doc.data().message,
+              time: formatTime(doc.data().createdAt),
+              unread: !doc.data().read,
+              timestamp: doc.data().createdAt?.toMillis() || Date.now()
+            }));
+
+            // Combine with default welcome message
+            const welcomeNotif = {
+              id: 'welcome',
+              text: `Welcome to The Book Parlor, ${fetchedName}! Claim your first spot on the shelf.`,
+              time: "Just now",
+              unread: true,
+              timestamp: Date.now() + 10000 // Ensure it stays on top if everything is new
+            };
+
+            const allNotifs = [welcomeNotif, ...fetchedNotifs].sort((a, b) => b.timestamp - a.timestamp);
+            setNotifications(allNotifs);
+          }, (error) => {
+            console.error("Error with real-time notifications listener:", error);
+          });
 
           // 3. Fetch All Users mapping (to fix "Unknown User" & get Location)
           const usersCollection = collection(db, 'users');
@@ -109,6 +145,7 @@ function HomePage() {
     return () => {
       unsubscribeAuth();
       if (unsubscribeBooks) unsubscribeBooks();
+      if (unsubscribeNotifs) unsubscribeNotifs();
     };
   }, [navigate]);
 
@@ -116,7 +153,7 @@ function HomePage() {
   const handleSignOut = async () => {
     try {
       await signOut(auth);
-      // ADDED: Clear recent users from local storage on log out
+      // Clear recent users from local storage on log out
       localStorage.removeItem('bookParlorRecentUsers');
       navigate('/login');
     } catch (error) {
@@ -124,12 +161,27 @@ function HomePage() {
     }
   };
 
-  // --- TOGGLE MENUS ---
+  // --- TOGGLE MENUS & NOTIFICATIONS ---
   const toggleNotifications = () => {
     setIsNotifOpen(!isNotifOpen);
     setIsDropdownOpen(false); 
     setIsFilterOpen(false);   
-    if (!isNotifOpen) setNotifications(prev => prev.map(n => ({ ...n, unread: false })));
+    
+    // Mark as read when opening
+    if (!isNotifOpen) {
+      setNotifications(prev => prev.map(n => ({ ...n, unread: false })));
+      
+      // Update read status in Firebase
+      notifications.forEach(async (n) => {
+        if (n.unread && n.id !== 'welcome') {
+          try {
+            await updateDoc(doc(db, 'notifications', n.id), { read: true });
+          } catch (err) {
+            console.error("Failed to mark notification as read:", err);
+          }
+        }
+      });
+    }
   };
 
   const toggleProfileDropdown = () => {
@@ -287,7 +339,7 @@ function HomePage() {
                     <div className="bg-gray-50 border-b px-5 py-3"><h3 className="font-bold">Notifications</h3></div>
                     <div className="max-h-80 overflow-y-auto">
                       {notifications.map(notif => (
-                        <div key={notif.id} className="px-5 py-4 border-b hover:bg-gray-50 cursor-pointer">
+                        <div key={notif.id} className={`px-5 py-4 border-b hover:bg-gray-50 cursor-pointer ${notif.unread ? 'bg-blue-50/30' : ''}`}>
                           <p className="text-sm text-gray-800 mb-1">{notif.text}</p>
                           <span className="text-xs text-gray-400">{notif.time}</span>
                         </div>
@@ -310,7 +362,7 @@ function HomePage() {
                   </div>
                   <span className="text-xl text-gray-800 capitalize">{userName}</span>
                   
-                  {/* --- NEW DROPDOWN CHEVRON ICON --- */}
+                  {/* Dropdown Chevron Icon */}
                   <svg 
                     className={`w-5 h-5 text-gray-600 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`} 
                     fill="none" 
